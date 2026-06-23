@@ -293,7 +293,7 @@ A module tells Nest which classes belong together and which dependencies are ava
 
 ```ts
 @Module({
-  imports: [AuthModule, GamesModule],
+  imports: [AuthModule],
   controllers: [BetsController],
   providers: [BetsManager, BetsService],
 })
@@ -644,7 +644,7 @@ If any step throws an error, PostgreSQL rolls back the complete operation. Prism
 
 ## 11. Secure Randomness and the Fairness Fields
 
-The game manager creates a 32-byte cryptographically random server seed:
+`BetsManager` creates a 32-byte cryptographically random server seed:
 
 ```ts
 const serverSeed = randomBytes(32).toString('hex');
@@ -662,8 +662,14 @@ const digest = createHmac('sha256', serverSeed)
   .update(`${clientSeed ?? ''}:${nonce.toString()}`)
   .digest();
 
-const result = (digest[0] & 1) === 0 ? 'heads' : 'tails';
+const headsOdds = 30;
+const value = digest.readUInt32BE(0);
+const bucket = value % 100;
+
+const result = bucket < headsOdds ? 'heads' : 'tails';
 ```
+
+With the current setting, `heads` appears about 30% of the time and `tails` about 70% of the time. That is not the same thing as "the player has a 30% chance to win" unless the backend controls the only winning selection. Because this coin-flip endpoint lets the player choose `heads` or `tails`, choosing `tails` currently has the higher hit rate.
 
 Field meanings:
 
@@ -1299,14 +1305,16 @@ A new game is more than a frontend form. A careful sequence is:
 
 1. Add a new `GameType` enum value and migration.
 2. Define request DTO rules.
-3. Implement secure server-side outcome derivation in `GamesManager`.
-4. Define payout rules on the backend.
-5. Reuse the wallet lock and serializable transaction.
-6. Create round, bet, ledger, and audit records atomically.
-7. Return only settled public values.
-8. Add deterministic RNG unit tests and accounting tests.
-9. Add concurrency/integration tests against PostgreSQL.
-10. Add the frontend form last.
+3. Add the HTTP route in `BetsController`.
+4. Add the use-case method in `BetsService`.
+5. Implement secure server-side outcome derivation and settlement in `BetsManager`.
+6. Define payout rules on the backend.
+7. Reuse the wallet lock and serializable transaction.
+8. Create round, bet, ledger, and audit records atomically.
+9. Return only settled public values.
+10. Add deterministic RNG unit tests and accounting tests.
+11. Add concurrency/integration tests against PostgreSQL.
+12. Add the frontend form last.
 
 Do not copy the coin-flip manager and remove the transaction protection. Extract shared settlement logic only when the behavior and invariants are understood.
 

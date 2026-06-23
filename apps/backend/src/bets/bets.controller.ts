@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { AuthenticatedUser } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AuthenticatedUser } from '../common/authenticated-user';
-import { RequestUser } from '../common/request-user.decorator';
+import { RequestUser } from '../auth/request-user.decorator';
 import { BetsService } from './bets.service';
 import { PlaceCoinFlipDto } from './dto/place-coin-flip.dto';
 

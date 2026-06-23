@@ -19,6 +19,8 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto, context: RequestContext) {
+    // Registration is a use case: hash the password, create the user/wallet data,
+    // create a session, then audit the event.
     const passwordHash = await this.authManager.hashPassword(dto.password);
     const user = await this.usersManager.createLocal({ ...dto, passwordHash });
     const tokens = await this.authManager.createSession(user.id, context);
@@ -27,6 +29,8 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, context: RequestContext) {
+    // The user may log in with username or email. We compare the submitted password
+    // against the stored Argon2 hash; the original password is never stored.
     const user = await this.usersManager.findByLogin(dto.login);
     if (!user?.passwordHash || !(await this.authManager.verifyPassword(user.passwordHash, dto.password))) {
       throw new UnauthorizedException('Invalid credentials');
@@ -38,6 +42,8 @@ export class AuthService {
   }
 
   issueGoogleSession(userId: string, context: RequestContext) {
+    // GoogleStrategy has already matched or created the local user. From this point
+    // onward, Google users receive the same local JWT/session treatment.
     return this.authManager.createSession(userId, context);
   }
 

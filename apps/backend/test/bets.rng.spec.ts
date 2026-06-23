@@ -1,8 +1,8 @@
 import { createHash } from 'crypto';
-import { GamesManager } from '../src/games/games.manager';
+import { BetsManager } from '../src/bets/bets.manager';
 
-describe('GamesManager', () => {
-  const manager = new GamesManager();
+describe('BetsManager RNG helpers', () => {
+  const manager = new BetsManager({} as never, {} as never);
 
   it('creates a committed coin flip that can be verified after settlement', () => {
     const round = manager.createCoinFlipRound(7n, 'player-seed');

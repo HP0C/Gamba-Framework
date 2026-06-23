@@ -1,5 +1,6 @@
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
+// Login accepts either username or email in the same field.
 export class LoginDto {
   @IsString()
   @MinLength(3)

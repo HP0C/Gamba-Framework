@@ -11,6 +11,8 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { JwtStrategy } from './jwt.strategy';
 
 @Module({
+  // A module is Nest's dependency container boundary for this feature. Anything
+  // listed in providers can be injected into constructors in this module.
   imports: [UsersModule, PassportModule, JwtModule.register({})],
   controllers: [AuthController],
   providers: [AuthManager, AuthService, JwtStrategy, JwtAuthGuard, GoogleStrategy, GoogleAuthGuard, GoogleConfiguredGuard],

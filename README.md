@@ -2,10 +2,6 @@
 
 A TypeScript monorepo for a local, demo-credit betting application. It contains a NestJS API, PostgreSQL/Prisma 6 persistence, a deliberately thin React/Vite client, Docker Compose, and optional Prisma Studio.
 
-New to backend development? Read the detailed [Backend and Prisma Studio Guide](docs/BACKEND_GUIDE.md) for endpoint examples, request flows, architecture explanations, and a field-by-field database reference.
-
-> **Not approved for real-money use.** A real gambling product requires qualified legal advice and applicable licensing, jurisdiction controls, age verification, KYC, AML/sanctions controls, responsible-gambling and self-exclusion systems, affordability/limit policy, payment security, fraud monitoring, privacy governance, independent game/RNG testing, operational security, and regulator-approved audit/reporting before launch. The fields and comments here are integration placeholders, not compliance.
-
 ## Structure
 
 ```text
@@ -15,7 +11,7 @@ apps/
     src/
       auth/                 password, Google OAuth structure, JWT sessions
       users/ wallet/ bets/  controllers, services, managers, modules
-      games/ audit/ prisma/ server-owned support modules
+      audit/ prisma/        server-owned support modules
     test/
   frontend/                 React/Vite client
 docker-compose.yml
@@ -120,7 +116,3 @@ docker compose config
 - No email verification, password reset, MFA, CSRF tokens, rate limiting, device/risk scoring, observability, or admin tooling.
 - Tests cover deterministic fair-game primitives and accounting invariants; a disposable PostgreSQL integration suite should exercise concurrent wagers and full ledger rollback.
 - No idempotency key contract yet; clients should not automatically replay bet requests until one is added.
-
-## Before Any Real-Money Launch
-
-Obtain licensing and legal/regulatory sign-off for every jurisdiction; implement verified age/KYC/AML/sanctions and geolocation decisions before wagering; add self-exclusion, limits, safer-gambling intervention and immutable regulator-grade audit retention; integrate certified payments and reconciliation; commission independent RNG/game/math and penetration testing; add idempotency, fraud/risk controls, monitoring, incident response, backups/disaster recovery, privacy retention, and hardened secret/key management. Treat every control as a tested, auditable production system rather than a schema flag.

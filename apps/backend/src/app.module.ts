@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BetsModule } from './bets/bets.module';
-import { GamesModule } from './games/games.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { WalletModule } from './wallet/wallet.module';
@@ -16,7 +15,6 @@ import { WalletModule } from './wallet/wallet.module';
     UsersModule,
     AuthModule,
     WalletModule,
-    GamesModule,
     BetsModule,
   ],
 })

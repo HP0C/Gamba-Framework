@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { minorUnits } from '../common/serialize';
 import { PrismaService } from '../prisma/prisma.service';
 import { BetsManager } from './bets.manager';
 import { PlaceCoinFlipDto } from './dto/place-coin-flip.dto';
@@ -21,10 +20,10 @@ export class BetsService {
     return bets.map((bet) => ({
       id: bet.id,
       gameType: bet.gameType.toLowerCase(),
-      stake: minorUnits(bet.stake),
+      stake: bet.stake.toString(),
       selection: bet.selection,
       result: bet.result,
-      payout: minorUnits(bet.payout),
+      payout: bet.payout.toString(),
       status: bet.status.toLowerCase(),
       serverSeedHash: bet.serverSeedHash,
       rngNonce: bet.rngNonce.toString(),
