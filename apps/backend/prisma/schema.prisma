@@ -42,6 +42,7 @@ enum BetStatus {
 
 enum GameType {
   COIN_FLIP
+  ROULETTE
 }
 
 model User {

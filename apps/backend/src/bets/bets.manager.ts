@@ -1,11 +1,26 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { BetStatus, GameType, Prisma, UserStatus, WalletTransactionType } from '@prisma/client';
 import { createHash, createHmac, randomBytes } from 'crypto';
 import { AuditManager } from '../audit/audit.manager';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlaceCoinFlipDto } from './dto/place-coin-flip.dto';
+import { PlaceRouletteDto } from './dto/place-roulette.dto';
 
 export type CoinFlipSelection = 'heads' | 'tails';
+export type RouletteBetType = 'number' | 'colour';
+export type RouletteColour = 'red' | 'black' | 'green';
+
+const ROULETTE_GAME_TYPE = 'ROULETTE' as GameType;
+const ROULETTE_RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+const ROULETTE_OUTCOMES = 37;
+const UINT32_RANGE = 0x1_0000_0000;
+const ROULETTE_REJECTION_LIMIT = Math.floor(UINT32_RANGE / ROULETTE_OUTCOMES) * ROULETTE_OUTCOMES;
 
 export interface FairCoinFlipRound {
   serverSeed: string;
@@ -13,6 +28,22 @@ export interface FairCoinFlipRound {
   nonce: bigint;
   clientSeed?: string;
   result: CoinFlipSelection;
+}
+
+export interface FairRouletteRound {
+  serverSeed: string;
+  serverSeedHash: string;
+  nonce: bigint;
+  clientSeed?: string;
+  resultNumber: number;
+  resultColour: RouletteColour;
+  result: string;
+}
+
+interface RouletteSelection {
+  betType: RouletteBetType;
+  selection: number | RouletteColour;
+  display: string;
 }
 
 interface ResolvedGame {
@@ -62,6 +93,31 @@ export class BetsManager {
     });
   }
 
+  async placeRoulette(userId: string, dto: PlaceRouletteDto) {
+    const stake = BigInt(dto.stake);
+    const selection = this.normaliseRouletteSelection(dto);
+
+    return this.settleBet({
+      userId,
+      gameType: ROULETTE_GAME_TYPE,
+      stake,
+      selection: selection.display,
+      clientSeed: dto.clientSeed,
+      resolveGame: ({ nonce, clientSeed }) => {
+        const fairRound = this.createRouletteRound(nonce, clientSeed);
+        const payout = this.calculateRoulettePayout(stake, selection, fairRound);
+
+        return {
+          result: fairRound.result,
+          payout,
+          serverSeed: fairRound.serverSeed,
+          serverSeedHash: fairRound.serverSeedHash,
+          clientSeed: fairRound.clientSeed,
+        };
+      },
+    });
+  }
+
   createCoinFlipRound(nonce: bigint, clientSeed?: string): FairCoinFlipRound {
     const serverSeed = randomBytes(32).toString('hex');
     const serverSeedHash = createHash('sha256').update(serverSeed).digest('hex');
@@ -80,6 +136,40 @@ export class BetsManager {
     return bucket < headsOdds ? 'heads' : 'tails';
   }
 
+  createRouletteRound(nonce: bigint, clientSeed?: string): FairRouletteRound {
+    const serverSeed = randomBytes(32).toString('hex');
+    const serverSeedHash = createHash('sha256').update(serverSeed).digest('hex');
+    const resultNumber = this.deriveRouletteNumber(serverSeed, nonce, clientSeed);
+    const resultColour = this.rouletteColourForNumber(resultNumber);
+    return {
+      serverSeed,
+      serverSeedHash,
+      nonce,
+      clientSeed,
+      resultNumber,
+      resultColour,
+      result: `${resultNumber}:${resultColour}`,
+    };
+  }
+
+  deriveRouletteNumber(serverSeed: string, nonce: bigint, clientSeed?: string): number {
+    for (let counter = 0; ; counter += 1) {
+      const digest = createHmac('sha256', serverSeed)
+        .update(`roulette:${clientSeed ?? ''}:${nonce.toString()}:${counter}`)
+        .digest();
+
+      for (let offset = 0; offset <= digest.length - 4; offset += 4) {
+        const value = digest.readUInt32BE(offset);
+        if (value < ROULETTE_REJECTION_LIMIT) return value % ROULETTE_OUTCOMES;
+      }
+    }
+  }
+
+  rouletteColourForNumber(number: number): RouletteColour {
+    if (number === 0) return 'green';
+    return ROULETTE_RED_NUMBERS.has(number) ? 'red' : 'black';
+  }
+
   private settleBet(input: SettleBetInput) {
     return this.withSerializationRetry(() =>
       this.prisma.$transaction(
@@ -93,6 +183,7 @@ export class BetsManager {
           if (wallet.balance < input.stake) throw new UnprocessableEntityException('Insufficient balance');
 
           const resolvedGame = input.resolveGame({ nonce, clientSeed: input.clientSeed });
+          if (resolvedGame.payout < 0n) throw new Error('Resolved game produced a negative payout');
           const gameRound = await this.createGameRound(tx, input, nonce, resolvedGame);
           const bet = await this.createPendingBet(tx, input, nonce, gameRound.id, resolvedGame);
           const afterStake = await this.applyStake(tx, wallet, input.stake, bet.id);
@@ -271,6 +362,37 @@ export class BetsManager {
       rngNonce: nonce.toString(),
       settledAt,
     };
+  }
+
+  private normaliseRouletteSelection(dto: PlaceRouletteDto): RouletteSelection {
+    const selection = dto.selection.trim().toLowerCase();
+
+    if (dto.betType === 'number') {
+      if (!/^\d+$/.test(selection)) throw new BadRequestException('Roulette number selection must be 0-36');
+      const selectedNumber = Number(selection);
+      if (!Number.isInteger(selectedNumber) || selectedNumber < 0 || selectedNumber > 36) {
+        throw new BadRequestException('Roulette number selection must be 0-36');
+      }
+      return { betType: 'number', selection: selectedNumber, display: `number:${selectedNumber}` };
+    }
+
+    if (!['red', 'black', 'green'].includes(selection)) {
+      throw new BadRequestException('Roulette colour selection must be red, black, or green');
+    }
+    return { betType: 'colour', selection: selection as RouletteColour, display: `colour:${selection}` };
+  }
+
+  private calculateRoulettePayout(
+    stake: bigint,
+    selection: RouletteSelection,
+    round: Pick<FairRouletteRound, 'resultNumber' | 'resultColour'>,
+  ): bigint {
+    if (selection.betType === 'number') {
+      return round.resultNumber === selection.selection ? stake * 36n : 0n;
+    }
+
+    if (round.resultColour !== selection.selection) return 0n;
+    return selection.selection === 'green' ? stake * 36n : stake * 2n;
   }
 
   private assertWageringAllowed(user: {

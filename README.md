@@ -81,7 +81,7 @@ Access and refresh JWTs use secure, HTTP-only, SameSite=Lax cookies. Refresh tok
 
 ## Server-Side Betting
 
-`POST /api/bets/coin-flip` accepts only a positive integer stake, `heads`/`tails`, and an optional client seed. The API:
+`POST /api/bets/coin-flip` accepts a positive integer stake, `heads`/`tails`, and an optional client seed. `POST /api/bets/roulette` accepts a positive integer stake, a `number` or `colour` bet type, a validated selection, and an optional client seed. Both endpoints use the same server-side settlement pipeline. The API:
 
 1. Authenticates the session and checks account/exclusion state.
 2. Opens a serializable PostgreSQL transaction and locks the player's wallet row with `FOR UPDATE`.

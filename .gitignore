@@ -6,4 +6,3 @@ apps/*/.env
 *.log
 .DS_Store
 apps/backend/src/generated
-

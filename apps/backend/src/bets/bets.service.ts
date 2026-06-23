@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { BetsManager } from './bets.manager';
 import { PlaceCoinFlipDto } from './dto/place-coin-flip.dto';
+import { PlaceRouletteDto } from './dto/place-roulette.dto';
 
 @Injectable()
 export class BetsService {
@@ -9,6 +10,10 @@ export class BetsService {
 
   placeCoinFlip(userId: string, dto: PlaceCoinFlipDto) {
     return this.manager.placeCoinFlip(userId, dto);
+  }
+
+  placeRoulette(userId: string, dto: PlaceRouletteDto) {
+    return this.manager.placeRoulette(userId, dto);
   }
 
   async history(userId: string) {

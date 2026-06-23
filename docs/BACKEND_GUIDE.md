@@ -449,6 +449,35 @@ Authentication required.
 
 `stake: 100` means GBP 1.00 in this demo. The request cannot specify `result`, `payout`, or `newBalance`. Extra DTO fields are rejected.
 
+### Place a Roulette Bet
+
+`POST /bets/roulette`
+
+Authentication required.
+
+Colour bet:
+
+```json
+{
+  "stake": 100,
+  "betType": "colour",
+  "selection": "red",
+  "clientSeed": "my-optional-seed"
+}
+```
+
+Number bet:
+
+```json
+{
+  "stake": 100,
+  "betType": "number",
+  "selection": "17"
+}
+```
+
+Roulette results are generated server-side as European roulette numbers `0-36`. `0` is green. Number wins pay total `36x`, red/black wins pay total `2x`, and green colour wins pay total `36x`.
+
 ### Bet History
 
 `GET /bets`
@@ -854,7 +883,8 @@ Coin flips normally move from `PENDING` to `SETTLED` inside one fast database tr
 
 | Value | Meaning |
 | --- | --- |
-| `COIN_FLIP` | Current heads/tails game |
+| `COIN_FLIP` | Heads/tails game |
+| `ROULETTE` | European roulette number/colour game |
 
 ## 14. Prisma Studio: Every Model and Field
 
