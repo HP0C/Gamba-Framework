@@ -48,7 +48,7 @@ export class LiveTrueLayerProvider implements TrueLayerProvider {
   private notImplemented(): never {
     void this.config.get<string>('TRUELAYER_CLIENT_ID');
     throw new ServiceUnavailableException(
-      'Live TrueLayer mode is not implemented. Use TRUELAYER_MODE=mock or sandbox until live API auth, request signing, webhooks, and reconciliation are built.',
+      'Live TrueLayer mode is not implemented. Use TRUELAYER_MODE=sandbox until live API auth, request signing, webhooks, and reconciliation are built.',
     );
   }
 }

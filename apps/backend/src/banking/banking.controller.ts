@@ -28,12 +28,6 @@ export class BankingController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('mock/connect')
-  connectMockBank(@RequestUser() user: AuthenticatedUser) {
-    return this.banking.connectMockBank(user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
   @Get('truelayer/callback')
   async trueLayerCallback(
     @RequestUser() user: AuthenticatedUser,

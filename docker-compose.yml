@@ -31,7 +31,7 @@ services:
       GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
       FRONTEND_URL: http://localhost:5173
       DEFAULT_WALLET_BALANCE: 10000
-      TRUELAYER_MODE: ${TRUELAYER_MODE:-mock}
+      TRUELAYER_MODE: ${TRUELAYER_MODE:-sandbox}
       TRUELAYER_CLIENT_ID: ${TRUELAYER_CLIENT_ID:-}
       TRUELAYER_CLIENT_SECRET: ${TRUELAYER_CLIENT_SECRET:-}
       TRUELAYER_REDIRECT_URI: http://localhost:3000/api/banking/truelayer/callback

@@ -2,10 +2,10 @@ import { BankingPaymentStatus } from '@prisma/client';
 import { BankingManager } from '../src/banking/banking.manager';
 import { PrismaService } from '../src/prisma/prisma.service';
 
-describe('mock banking wallet ledger behaviour', () => {
+describe('banking wallet ledger behaviour', () => {
   const userId = '00000000-0000-0000-0000-000000000001';
 
-  it('credits the wallet and writes a deposit ledger entry after a successful mock deposit', async () => {
+  it('credits the wallet and writes a deposit ledger entry after a successful provider deposit', async () => {
     const pendingPayment = {
       id: 'payment-id',
       userId,
@@ -45,6 +45,9 @@ describe('mock banking wallet ledger behaviour', () => {
         update: jest.fn(),
       },
       walletTransaction: { create: jest.fn() },
+      externalBankAccount: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     const prisma = {
       user: {
@@ -65,8 +68,8 @@ describe('mock banking wallet ledger behaviour', () => {
     } as unknown as PrismaService;
     const provider = {
       createDeposit: jest.fn().mockResolvedValue({
-        providerPaymentId: 'mock-payment-id',
-        paymentSourceId: 'mock-source-id',
+        providerPaymentId: 'provider-payment-id',
+        paymentSourceId: 'provider-source-id',
         status: BankingPaymentStatus.SUCCEEDED,
       }),
     };
@@ -110,16 +113,16 @@ describe('mock banking wallet ledger behaviour', () => {
     expect(settleTransaction.bankingPayment.update).toHaveBeenCalledWith({
       where: { id: 'payment-id' },
       data: expect.objectContaining({
-        providerPaymentId: 'mock-payment-id',
-        paymentSourceId: 'mock-source-id',
+        providerPaymentId: 'provider-payment-id',
+        paymentSourceId: 'provider-source-id',
         status: BankingPaymentStatus.SUCCEEDED,
       }),
     });
     expect(response).toEqual(expect.objectContaining({ id: 'payment-id', amount: '500', newBalance: '1500' }));
   });
 
-  it('reserves wallet funds and writes a withdrawal ledger entry before a mock payout is settled', async () => {
-    const transaction = {
+  it('reserves wallet funds and writes a withdrawal ledger entry before a provider payout is settled', async () => {
+    const reserveTransaction = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'wallet-id' }]),
       wallet: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'wallet-id', balance: 1_000n }),
@@ -130,8 +133,7 @@ describe('mock banking wallet ledger behaviour', () => {
       },
       walletTransaction: { create: jest.fn() },
     };
-    const prisma = {
-      $transaction: jest.fn(async (operation: (tx: typeof transaction) => unknown) => operation(transaction)),
+    const settleTransaction = {
       bankingPayout: {
         update: jest.fn().mockResolvedValue({
           id: 'payout-id',
@@ -140,10 +142,23 @@ describe('mock banking wallet ledger behaviour', () => {
           currency: 'GBP',
         }),
       },
+      externalBankAccount: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const prisma = {
+      $transaction: jest
+        .fn()
+        .mockImplementationOnce(async (operation: (tx: typeof reserveTransaction) => unknown) =>
+          operation(reserveTransaction),
+        )
+        .mockImplementationOnce(async (operation: (tx: typeof settleTransaction) => unknown) =>
+          operation(settleTransaction),
+        ),
     } as unknown as PrismaService;
     const provider = {
       createPayout: jest.fn().mockResolvedValue({
-        providerPayoutId: 'mock-payout-id',
+        providerPayoutId: 'provider-payout-id',
         status: BankingPaymentStatus.SUCCEEDED,
       }),
     };
@@ -152,8 +167,8 @@ describe('mock banking wallet ledger behaviour', () => {
 
     const response = await manager.createPayout(userId, { amount: 400 });
 
-    expect(transaction.wallet.update).toHaveBeenCalledWith({ where: { id: 'wallet-id' }, data: { balance: 600n } });
-    expect(transaction.walletTransaction.create).toHaveBeenCalledWith({
+    expect(reserveTransaction.wallet.update).toHaveBeenCalledWith({ where: { id: 'wallet-id' }, data: { balance: 600n } });
+    expect(reserveTransaction.walletTransaction.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         walletId: 'wallet-id',
         type: 'WITHDRAWAL',
@@ -164,9 +179,9 @@ describe('mock banking wallet ledger behaviour', () => {
         referenceId: 'payout-id',
       }),
     });
-    expect(prisma.bankingPayout.update).toHaveBeenCalledWith({
+    expect(settleTransaction.bankingPayout.update).toHaveBeenCalledWith({
       where: { id: 'payout-id' },
-      data: expect.objectContaining({ providerPayoutId: 'mock-payout-id', status: BankingPaymentStatus.SUCCEEDED }),
+      data: expect.objectContaining({ providerPayoutId: 'provider-payout-id', status: BankingPaymentStatus.SUCCEEDED }),
     });
     expect(response).toEqual(expect.objectContaining({ id: 'payout-id', amount: '400', newBalance: '600' }));
   });

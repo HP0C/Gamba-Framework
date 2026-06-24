@@ -90,10 +90,6 @@ export class BankingManager {
     return { overview: await this.syncBankData(userId) };
   }
 
-  async connectMockBank(userId: string) {
-    return this.connectBank(userId);
-  }
-
   async completeTrueLayerConnection(userId: string, input: { error?: string; providerConnectionId?: string }) {
     const connection = await this.findConnectionForCallback(userId, input.providerConnectionId);
     if (!connection) throw new NotFoundException('Pending TrueLayer connection not found');

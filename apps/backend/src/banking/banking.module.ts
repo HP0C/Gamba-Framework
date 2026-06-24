@@ -6,7 +6,6 @@ import { BankingController } from './banking.controller';
 import { BankingManager } from './banking.manager';
 import { BankingService } from './banking.service';
 import { LiveTrueLayerProvider } from './providers/live-truelayer.provider';
-import { MockTrueLayerProvider } from './providers/mock-truelayer.provider';
 import { SandboxTrueLayerProvider } from './providers/sandbox-truelayer.provider';
 import { TRUE_LAYER_PROVIDER } from './providers/truelayer-provider.interface';
 
@@ -16,22 +15,20 @@ import { TRUE_LAYER_PROVIDER } from './providers/truelayer-provider.interface';
   providers: [
     BankingService,
     BankingManager,
-    MockTrueLayerProvider,
     SandboxTrueLayerProvider,
     LiveTrueLayerProvider,
     {
       provide: TRUE_LAYER_PROVIDER,
-      inject: [ConfigService, MockTrueLayerProvider, SandboxTrueLayerProvider, LiveTrueLayerProvider],
+      inject: [ConfigService, SandboxTrueLayerProvider, LiveTrueLayerProvider],
       useFactory: (
         config: ConfigService,
-        mockProvider: MockTrueLayerProvider,
         sandboxProvider: SandboxTrueLayerProvider,
         liveProvider: LiveTrueLayerProvider,
       ) => {
-        const mode = config.get<string>('TRUELAYER_MODE', 'mock');
+        const mode = config.get<string>('TRUELAYER_MODE', 'sandbox');
         if (mode === 'live') return liveProvider;
         if (mode === 'sandbox') return sandboxProvider;
-        return mockProvider;
+        throw new Error(`Unsupported TRUELAYER_MODE "${mode}". Use "sandbox" or "live".`);
       },
     },
   ],

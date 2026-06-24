@@ -15,10 +15,6 @@ export class BankingService {
     return this.manager.connectBank(userId);
   }
 
-  connectMockBank(userId: string) {
-    return this.manager.connectMockBank(userId);
-  }
-
   completeTrueLayerConnection(userId: string, input: { error?: string; providerConnectionId?: string }) {
     return this.manager.completeTrueLayerConnection(userId, input);
   }

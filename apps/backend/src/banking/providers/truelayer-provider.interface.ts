@@ -1,6 +1,6 @@
 import { BankingConnectionStatus, BankingPaymentStatus } from '@prisma/client';
 
-export type TrueLayerProviderMode = 'mock' | 'sandbox' | 'live';
+export type TrueLayerProviderMode = 'sandbox' | 'live';
 
 export interface CreateProviderConnectionInput {
   userId: string;

@@ -157,7 +157,7 @@ export default function App() {
       form.reset();
       await refreshAfterMoneyMovement(
         result,
-        banking?.mode === 'sandbox' ? 'TrueLayer sandbox payment created' : 'Wallet simulation deposit created',
+        'TrueLayer sandbox payment created',
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Deposit failed');
@@ -173,9 +173,7 @@ export default function App() {
       });
       await refreshAfterMoneyMovement(
         result,
-        banking?.mode === 'sandbox'
-          ? 'TrueLayer sandbox payment created from transaction amount'
-          : 'Wallet simulation deposit created from transaction amount',
+        'TrueLayer sandbox payment created from transaction amount',
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Deposit failed');
@@ -206,7 +204,7 @@ export default function App() {
       form.reset();
       await refreshAfterMoneyMovement(
         result,
-        banking?.mode === 'sandbox' ? 'TrueLayer sandbox payout requested' : 'Wallet simulation payout sent',
+        'TrueLayer sandbox payout requested',
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Payout failed');
@@ -284,12 +282,12 @@ export default function App() {
           <section className="banking">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">{banking?.mode === 'sandbox' ? 'TrueLayer sandbox' : 'Local mock banking'}</p>
+                <p className="eyebrow">TrueLayer sandbox</p>
                 <h2>Banking</h2>
               </div>
               <div className="button-row">
                 <button type="button" onClick={() => void connectBank()}>
-                  {banking?.mode === 'sandbox' ? 'Connect TrueLayer sandbox' : 'Connect mock bank'}
+                  Connect TrueLayer sandbox
                 </button>
                 <button
                   type="button"
@@ -305,9 +303,7 @@ export default function App() {
             </div>
 
             <p className="muted">
-              {banking?.mode === 'sandbox'
-                ? 'Account data comes from TrueLayer Data sandbox when enabled, otherwise local sandbox sample transactions are shown. Deposits use TrueLayer Payments sandbox pay-ins. Payouts use closed-loop sandbox payouts after a successful deposit.'
-                : 'This is local mock bank data. Deposits and payouts update your internal wallet ledger, which is what bets use.'}
+              Account data comes from TrueLayer Data sandbox when enabled, otherwise local sandbox sample transactions are shown. Deposits use TrueLayer Payments sandbox pay-ins. Payouts use closed-loop sandbox payouts after a successful deposit.
             </p>
 
             {banking?.accounts.length ? (
@@ -323,24 +319,20 @@ export default function App() {
                 </div>
 
                 <form className="mini-form" onSubmit={(event) => void createDeposit(event)}>
-                  <h3>{banking?.mode === 'sandbox' ? 'TrueLayer sandbox deposit' : 'Wallet simulation deposit'}</h3>
+                  <h3>TrueLayer sandbox deposit</h3>
                   <label>Amount in pence<input name="amount" type="number" min="1" step="1" required /></label>
-                  <button type="submit">{banking?.mode === 'sandbox' ? 'Pay with TrueLayer' : 'Deposit to wallet'}</button>
+                  <button type="submit">Pay with TrueLayer</button>
                   <small>
-                    {banking?.mode === 'sandbox'
-                      ? 'You will be redirected to the TrueLayer sandbox hosted payment page.'
-                      : 'This credits the local wallet immediately for development.'}
+                    You will be redirected to the TrueLayer sandbox hosted payment page.
                   </small>
                 </form>
 
                 <form className="mini-form" onSubmit={(event) => void createPayout(event)}>
-                  <h3>{banking?.mode === 'sandbox' ? 'TrueLayer sandbox payout' : 'Wallet simulation payout'}</h3>
+                  <h3>TrueLayer sandbox payout</h3>
                   <label>Amount in pence<input name="amount" type="number" min="1" step="1" required /></label>
                   <button type="submit">Payout from wallet</button>
                   <small>
-                    {banking?.mode === 'sandbox'
-                      ? 'Sandbox payouts are closed-loop, so make a successful deposit first.'
-                      : 'This debits the local wallet immediately for development.'}
+                    Sandbox payouts are closed-loop, so make a successful deposit first.
                   </small>
                 </form>
               </div>
@@ -366,7 +358,7 @@ export default function App() {
                             Use as stake
                           </button>
                           <button type="button" onClick={() => void depositFromTransaction(transaction)}>
-                            {banking?.mode === 'sandbox' ? 'Deposit this amount' : 'Simulate deposit'}
+                            Deposit this amount
                           </button>
                         </div>
                       </li>
