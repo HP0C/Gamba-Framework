@@ -87,12 +87,16 @@ export class AuthController {
   }
 
   private cookieOptions() {
+    const isProduction = this.config.get('NODE_ENV') === 'production';
     return {
       // httpOnly means frontend JavaScript cannot read the token values directly.
       httpOnly: true,
       // Localhost development uses plain HTTP; production cookies must require HTTPS.
-      secure: this.config.get('NODE_ENV') === 'production',
-      sameSite: 'lax' as const,
+      secure: isProduction,
+      // Vercel and Render are different sites. Production API cookies therefore
+      // need SameSite=None so the browser includes them on frontend -> backend
+      // fetch requests. Localhost can stay Lax because it often runs over HTTP.
+      sameSite: (isProduction ? 'none' : 'lax') as 'none' | 'lax',
       path: '/',
     };
   }
