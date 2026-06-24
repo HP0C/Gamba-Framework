@@ -27,28 +27,35 @@ export class BankingController {
     return this.banking.connectBank(user.userId);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('truelayer/callback')
   async trueLayerCallback(
-    @RequestUser() user: AuthenticatedUser,
     @Query('error') error: string | undefined,
     @Query('connection_id') snakeConnectionId: string | undefined,
     @Query('connectionId') camelConnectionId: string | undefined,
     @Res() res: Response,
   ) {
-    await this.banking.completeTrueLayerConnection(user.userId, {
-      error,
-      providerConnectionId: snakeConnectionId ?? camelConnectionId,
-    });
     const redirect = new URL(this.config.getOrThrow<string>('FRONTEND_URL'));
-    redirect.searchParams.set('banking', error ? 'error' : 'connected');
+    const providerConnectionId = snakeConnectionId ?? camelConnectionId;
+
+    if (!providerConnectionId) {
+      redirect.searchParams.set('banking', 'error');
+      return res.redirect(redirect.toString());
+    }
+
+    try {
+      await this.banking.completeTrueLayerConnectionCallback({
+        error,
+        providerConnectionId,
+      });
+      redirect.searchParams.set('banking', error ? 'error' : 'connected');
+    } catch {
+      redirect.searchParams.set('banking', 'error');
+    }
     return res.redirect(redirect.toString());
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('truelayer/payment-callback')
   async trueLayerPaymentCallback(
-    @RequestUser() user: AuthenticatedUser,
     @Query('error') error: string | undefined,
     @Query('bankingPaymentId') paymentId: string | undefined,
     @Query('payment_id') snakeProviderPaymentId: string | undefined,
@@ -56,17 +63,23 @@ export class BankingController {
     @Res() res: Response,
   ) {
     const redirect = new URL(this.config.getOrThrow<string>('FRONTEND_URL'));
-    if (error && !paymentId && !snakeProviderPaymentId && !camelProviderPaymentId) {
+    const providerPaymentId = snakeProviderPaymentId ?? camelProviderPaymentId;
+
+    if (!paymentId && !providerPaymentId) {
       redirect.searchParams.set('payment', 'error');
       return res.redirect(redirect.toString());
     }
 
-    const result = await this.banking.completeTrueLayerPayment(user.userId, {
-      error,
-      paymentId,
-      providerPaymentId: snakeProviderPaymentId ?? camelProviderPaymentId,
-    });
-    redirect.searchParams.set('payment', result.status);
+    try {
+      const result = await this.banking.completeTrueLayerPaymentCallback({
+        error,
+        paymentId,
+        providerPaymentId,
+      });
+      redirect.searchParams.set('payment', result.status);
+    } catch {
+      redirect.searchParams.set('payment', 'error');
+    }
     return res.redirect(redirect.toString());
   }
 

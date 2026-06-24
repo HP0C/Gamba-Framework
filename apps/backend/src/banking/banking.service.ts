@@ -19,6 +19,10 @@ export class BankingService {
     return this.manager.completeTrueLayerConnection(userId, input);
   }
 
+  completeTrueLayerConnectionCallback(input: { error?: string; providerConnectionId?: string }) {
+    return this.manager.completeTrueLayerConnectionCallback(input);
+  }
+
   syncBankData(userId: string) {
     return this.manager.syncBankData(userId);
   }
@@ -29,6 +33,10 @@ export class BankingService {
 
   completeTrueLayerPayment(userId: string, input: { error?: string; paymentId?: string; providerPaymentId?: string }) {
     return this.manager.completeTrueLayerPayment(userId, input);
+  }
+
+  completeTrueLayerPaymentCallback(input: { error?: string; paymentId?: string; providerPaymentId?: string }) {
+    return this.manager.completeTrueLayerPaymentCallback(input);
   }
 
   refreshPendingDeposits(userId: string) {

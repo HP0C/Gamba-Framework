@@ -94,20 +94,34 @@ export class BankingManager {
     const connection = await this.findConnectionForCallback(userId, input.providerConnectionId);
     if (!connection) throw new NotFoundException('Pending TrueLayer connection not found');
 
+    return this.completeStoredTrueLayerConnection(connection, input.error);
+  }
+
+  async completeTrueLayerConnectionCallback(input: { error?: string; providerConnectionId?: string }) {
+    const connection = await this.findConnectionForProviderCallback(input.providerConnectionId);
+    if (!connection) throw new NotFoundException('Pending TrueLayer connection not found');
+
+    return this.completeStoredTrueLayerConnection(connection, input.error);
+  }
+
+  private async completeStoredTrueLayerConnection(
+    connection: { id: string; userId: string; metadata: Prisma.JsonValue | null },
+    error?: string,
+  ) {
     const metadata = {
       ...this.metadataRecord(connection.metadata),
       callbackReceivedAt: new Date().toISOString(),
-      callbackError: input.error,
+      callbackError: error,
     };
-    const status = input.error ? BankingConnectionStatus.ERROR : BankingConnectionStatus.ACTIVE;
+    const status = error ? BankingConnectionStatus.ERROR : BankingConnectionStatus.ACTIVE;
     const updated = await this.prisma.bankConnection.update({
       where: { id: connection.id },
       data: { status, metadata: this.json(metadata) },
     });
 
     await this.audit.create({
-      userId,
-      action: input.error ? 'BANKING_CONNECTION_FAILED' : 'BANKING_CONNECTION_AUTHORIZED',
+      userId: connection.userId,
+      action: error ? 'BANKING_CONNECTION_FAILED' : 'BANKING_CONNECTION_AUTHORIZED',
       entityType: 'BANK_CONNECTION',
       entityId: updated.id,
       metadata: { provider: BANKING_PROVIDER, mode: this.provider.mode, status: updated.status },
@@ -358,24 +372,14 @@ export class BankingManager {
     const payment = await this.findPaymentForCallback(userId, input.paymentId, input.providerPaymentId);
     if (!payment) throw new NotFoundException('Pending TrueLayer payment was not found');
 
-    if (input.error) {
-      return this.applyProviderDepositResult(userId, payment.id, {
-        providerPaymentId: payment.providerPaymentId,
-        status: BankingPaymentStatus.FAILED,
-        raw: {
-          provider: BANKING_PROVIDER,
-          mode: this.provider.mode,
-          callbackError: input.error,
-        },
-      });
-    }
+    return this.completeStoredTrueLayerPayment(payment, input.error);
+  }
 
-    if (payment.providerPaymentId.startsWith('pending-')) {
-      throw new BadRequestException('TrueLayer payment has not been created with the provider yet');
-    }
+  async completeTrueLayerPaymentCallback(input: { error?: string; paymentId?: string; providerPaymentId?: string }) {
+    const payment = await this.findPaymentForProviderCallback(input.paymentId, input.providerPaymentId);
+    if (!payment) throw new NotFoundException('Pending TrueLayer payment was not found');
 
-    const providerPayment = await this.provider.getDeposit(payment.providerPaymentId);
-    return this.applyProviderDepositResult(userId, payment.id, providerPayment);
+    return this.completeStoredTrueLayerPayment(payment, input.error);
   }
 
   async refreshPendingDeposits(userId: string) {
@@ -658,6 +662,18 @@ export class BankingManager {
     });
   }
 
+  private findConnectionForProviderCallback(providerConnectionId?: string) {
+    if (!providerConnectionId) return null;
+
+    return this.prisma.bankConnection.findFirst({
+      where: {
+        provider: BANKING_PROVIDER,
+        providerConnectionId,
+        status: BankingConnectionStatus.AUTHORIZATION_REQUIRED,
+      },
+    });
+  }
+
   private findSourceTransactionForUser(userId: string, sourceTransactionId: string) {
     return this.prisma.externalBankTransaction.findFirst({
       where: {
@@ -740,6 +756,46 @@ export class BankingManager {
       where: { userId, provider: BANKING_PROVIDER, status: BankingPaymentStatus.PENDING },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  private findPaymentForProviderCallback(paymentId?: string, providerPaymentId?: string) {
+    if (paymentId) {
+      return this.prisma.bankingPayment.findFirst({
+        where: { id: paymentId, provider: BANKING_PROVIDER },
+      });
+    }
+
+    if (providerPaymentId) {
+      return this.prisma.bankingPayment.findFirst({
+        where: { provider: BANKING_PROVIDER, providerPaymentId },
+      });
+    }
+
+    return null;
+  }
+
+  private async completeStoredTrueLayerPayment(
+    payment: { id: string; userId: string; providerPaymentId: string },
+    error?: string,
+  ) {
+    if (error) {
+      return this.applyProviderDepositResult(payment.userId, payment.id, {
+        providerPaymentId: payment.providerPaymentId,
+        status: BankingPaymentStatus.FAILED,
+        raw: {
+          provider: BANKING_PROVIDER,
+          mode: this.provider.mode,
+          callbackError: error,
+        },
+      });
+    }
+
+    if (payment.providerPaymentId.startsWith('pending-')) {
+      throw new BadRequestException('TrueLayer payment has not been created with the provider yet');
+    }
+
+    const providerPayment = await this.provider.getDeposit(payment.providerPaymentId);
+    return this.applyProviderDepositResult(payment.userId, payment.id, providerPayment);
   }
 
   private async lockBankingPayment(tx: Prisma.TransactionClient, userId: string, paymentId: string) {
