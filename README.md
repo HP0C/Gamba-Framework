@@ -26,7 +26,8 @@ Controllers handle HTTP, services coordinate use cases, and managers own lower-l
 Requirements: Docker with Compose v2.
 
 ```bash
-docker compose up --build
+docker compose --profile tools up -d --build
+docker compose --profile tools down
 ```
 
 Open the UI at <http://localhost:5173>; the API is at <http://localhost:3000/api>. The backend waits for PostgreSQL and runs `prisma migrate deploy` before starting. Local Compose defaults issue new password accounts GBP 100.00 of explicitly labeled demo credit through a ledger transaction. Banking uses `TRUELAYER_MODE=sandbox`; paste sandbox keys into the root `.env` before using the banking buttons.
@@ -57,6 +58,29 @@ npm run prisma:studio
 ```
 
 `prisma migrate dev` is a development command that creates migration files. Commit and deploy reviewed migrations with `prisma migrate deploy` in shared environments.
+
+## Deploy Backend To Render
+
+When using Render with Supabase, configure the backend as a Render Web Service. The app reads Render's `PORT` variable and binds to `0.0.0.0`.
+
+For Supabase, use both database URLs:
+
+```env
+DATABASE_URL=postgresql://postgres.project-ref:password@aws-0-region.pooler.supabase.com:6543/postgres?pgbouncer=true
+DIRECT_URL=postgresql://postgres.project-ref:password@aws-0-region.pooler.supabase.com:5432/postgres
+```
+
+`DATABASE_URL` is the transaction-mode pooler used by the running app. `DIRECT_URL` is the session-mode pooler used by Prisma migrations. Do not include wrapping quotes in Render environment variable values, and URL-encode special characters in the database password.
+
+The deployed backend also needs:
+
+```env
+PORT=3000
+FRONTEND_URL=https://your-vercel-production-domain.vercel.app
+GOOGLE_CALLBACK_URL=https://your-render-backend.onrender.com/api/auth/google/callback
+JWT_ACCESS_SECRET=replace-with-a-long-random-secret
+JWT_REFRESH_SECRET=replace-with-another-long-random-secret
+```
 
 ## Authentication
 
