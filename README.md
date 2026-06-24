@@ -1,6 +1,6 @@
 # Gamba Server Skeleton
 
-A TypeScript monorepo for a local, demo-credit betting application. It contains a NestJS API, PostgreSQL/Prisma 6 persistence, a deliberately thin React/Vite client, Docker Compose, and optional Prisma Studio.
+A monorepo for an Open Banking betting application prototype. It contains a NestJS API, PostgreSQL/Prisma 6 persistence, a poopy React/Vite client, Docker Compose, and optional Prisma Studio.
 
 ## Structure
 
@@ -30,70 +30,13 @@ docker compose --profile tools up -d --build
 docker compose --profile tools down
 ```
 
-Open the UI at <http://localhost:5173>; the API is at <http://localhost:3000/api>. The backend waits for PostgreSQL and runs `prisma migrate deploy` before starting. Local Compose defaults issue new password accounts GBP 100.00 of explicitly labeled demo credit through a ledger transaction. Banking uses `TRUELAYER_MODE=sandbox`; paste sandbox keys into the root `.env` before using the banking buttons.
-
-Stop services with `docker compose down`. Add `-v` only when you intentionally want to delete local database data.
-
-## Prisma
-
-The initial migration is deployed automatically by the backend container. To apply committed migrations manually:
-
-```bash
-docker compose run --rm backend npx prisma migrate deploy
-```
+Open the UI at <http://localhost:5173>; the API is at <http://localhost:3000/api>. The backend waits for PostgreSQL and runs `prisma migrate deploy` before starting. Local Compose starts new wallet balances at GBP 0.00 so deposits must come through the banking flow.
 
 Start Prisma Studio at <http://localhost:5555>:
 
 ```bash
 docker compose --profile tools up studio
 ```
-
-For native development, copy `apps/backend/.env.example` to `apps/backend/.env`, point `DATABASE_URL` at localhost, then use:
-
-```bash
-npm install
-npm run prisma:generate
-npm run prisma:migrate
-npm run prisma:studio
-```
-
-`prisma migrate dev` is a development command that creates migration files. Commit and deploy reviewed migrations with `prisma migrate deploy` in shared environments.
-
-## Deploy Backend To Render
-
-When using Render with Supabase, configure the backend as a Render Web Service. The app reads Render's `PORT` variable and binds to `0.0.0.0`.
-
-For Supabase, use both database URLs:
-
-```env
-DATABASE_URL=postgresql://postgres.project-ref:password@aws-0-region.pooler.supabase.com:6543/postgres?pgbouncer=true
-DIRECT_URL=postgresql://postgres.project-ref:password@aws-0-region.pooler.supabase.com:5432/postgres
-```
-
-`DATABASE_URL` is the transaction-mode pooler used by the running app. `DIRECT_URL` is the session-mode pooler used by Prisma migrations. Do not include wrapping quotes in Render environment variable values, and URL-encode special characters in the database password.
-
-The deployed backend also needs:
-
-```env
-PORT=3000
-FRONTEND_URL=https://your-vercel-production-domain.vercel.app
-GOOGLE_CALLBACK_URL=https://your-render-backend.onrender.com/api/auth/google/callback
-JWT_ACCESS_SECRET=replace-with-a-long-random-secret
-JWT_REFRESH_SECRET=replace-with-another-long-random-secret
-```
-
-## Deploy Frontend To Vercel
-
-The frontend should call the backend through Vercel's same-origin `/api` rewrite. This avoids browsers treating Render auth cookies as third-party cookies.
-
-In Vercel, either remove `VITE_API_URL` or set it to:
-
-```env
-VITE_API_URL=/api
-```
-
-The file `apps/frontend/vercel.json` rewrites `/api/*` to the Render backend. If your Vercel project root is the repository root instead of `apps/frontend`, copy that rewrite into a root `vercel.json` or change the Vercel project root to `apps/frontend`.
-
 ## Authentication
 
 - `POST /api/auth/register` creates a local user and Argon2id password hash.
@@ -103,7 +46,7 @@ The file `apps/frontend/vercel.json` rewrites `/api/*` to the Render backend. If
 - `GET /api/auth/me` returns the current user.
 - `GET /api/auth/google` and `/callback` provide the Passport Google OAuth structure and return 503 until credentials are configured.
 
-Access and refresh JWTs use secure, HTTP-only, SameSite=Lax cookies. Refresh tokens are Argon2id-hashed in revocable database sessions. Cookies are non-`Secure` only in localhost development; production needs HTTPS, deliberate proxy/cookie-domain configuration, CSRF review, rate limiting, credential-stuffing protection, breached-password policy, and secret rotation.
+Access and refresh JWTs use secure, HTTP-only, SameSite=Lax cookies. Refresh tokens are Argon2id-hashed in revocable database sessions. 
 
 ## Banking And TrueLayer Sandbox
 
@@ -118,24 +61,6 @@ The banking module is deliberately separate from betting:
 - `POST /api/banking/deposits/refresh` checks pending TrueLayer sandbox deposits and credits executed/settled payments.
 - `POST /api/banking/payouts` reserves wallet funds, then in sandbox mode attempts a closed-loop TrueLayer payout to the payment source from the latest successful deposit.
 
-The app never treats external bank transactions as spendable betting balance. They are read-only provider data used for display and amount suggestions. The wallet is still the only balance that bets can spend.
-
-Provider modes:
-
-- `TRUELAYER_MODE=sandbox`: account and transaction data comes from TrueLayer Data API sandbox when your Console app has Data API access. If TrueLayer returns `invalid_scope` for Data API, the app falls back to local sandbox sample transactions while Payments still use TrueLayer. Deposits use signed TrueLayer Payments v3 sandbox pay-ins through the hosted payment page. Payouts use closed-loop sandbox payouts after a successful deposit has created a payment source.
-- `TRUELAYER_MODE=live`: intentionally blocked with 503.
-
-To try TrueLayer sandbox, create a sandbox app in TrueLayer Console. Register these redirect URIs:
-
-```text
-http://localhost:3000/api/banking/truelayer/callback
-http://localhost:3000/api/banking/truelayer/payment-callback
-```
-
-The payment callback must be registered exactly as shown. Do not add query parameters such as `?bankingPaymentId=...` in the TrueLayer Console redirect URI.
-
-Then paste your values into the root `.env` file:
-
 ```env
 TRUELAYER_MODE=sandbox
 TRUELAYER_CLIENT_ID=your-sandbox-client-id
@@ -147,23 +72,6 @@ TRUELAYER_DATA_PROVIDER_ID=uk-cs-mock
 TRUELAYER_PAYMENT_PROVIDER_ID=mock-payments-gb-redirect
 TRUELAYER_CREDIT_DEPOSITS_ON=executed
 ```
-
-For the signing key, generate an ES512-compatible EC key pair locally, upload the public key in TrueLayer Console, and paste only the private key into `.env`:
-
-```bash
-openssl ecparam -name secp521r1 -genkey -noout -out truelayer-private-key.pem
-openssl ec -in truelayer-private-key.pem -pubout -out truelayer-public-key.pem
-```
-
-`TRUELAYER_PRIVATE_KEY` is the contents of `truelayer-private-key.pem`, with newlines written as `\n` if you keep it on one `.env` line. `TRUELAYER_CERTIFICATE_ID` is the key id/kid shown by TrueLayer for the uploaded public key.
-
-Then restart Docker:
-
-```bash
-docker compose up --build
-```
-
-The private key must stay local. Do not paste it into chat, commit it, or put it in `.env.example`. The `\n` characters are intentional: they let a multi-line PEM key live on one `.env` line.
 
 Current sandbox behaviour:
 
@@ -182,7 +90,6 @@ In Prisma Studio:
 - `WalletTransaction.referenceType` tells you what caused the wallet movement, for example `BANKING_PAYMENT`, `BANKING_PAYOUT`, or `BET`.
 - `WalletTransaction.referenceId` points to the row id in that referenced table.
 
-`TRUELAYER_MODE=live` currently returns a 503 on purpose. To make it real, implement `LiveTrueLayerProvider` with production TrueLayer base URLs, request signing/idempotency, hosted payment/auth redirects, webhooks, reconciliation, and failure/refund handling.
 
 ## Server-Side Betting
 
@@ -195,20 +102,511 @@ In Prisma Studio:
 5. Calculates the payout, updates the wallet, writes payout/audit records, and settles the bet in the same transaction.
 6. Returns the public result and the now-safe seed disclosure for verification.
 
-The lock prevents two concurrent wagers from observing and spending the same balance. Serializable-conflict retries are bounded. Database constraints also reject negative wallet balances and invalid stake/payout values.
 
-The frontend never generates randomness, determines wins, calculates payouts, or updates a balance directly. Moving any of those responsibilities to the browser would let a player tamper with the outcome or accounting. Server seeds are stored plainly only to demonstrate the protocol; production should encrypt/externalize them under managed keys, define rotation/reveal policy, and have the design independently reviewed.
+## API Endpoint Reference
 
-## Native Verification
+All backend routes are prefixed with `/api`. Most app routes use HTTP-only cookies for auth, so browser requests should include credentials. Money values are integer minor units, for example pence, and response money fields are usually strings so large `BIGINT` values do not lose precision in JavaScript.
 
-With Node 20+ and PostgreSQL available:
+### Auth
 
-```bash
-npm install
-npm run prisma:generate
-npm run test
-npm run build
-npm run lint
-npm run prisma:validate -w @gamba/backend
-docker compose config
+#### `POST /api/auth/register`
+
+Creates a username/password account, creates a wallet, creates a session, and sets `access_token` and `refresh_token` cookies.
+
+Request body:
+
+```json
+{
+  "email": "player@example.com",
+  "username": "player_123",
+  "password": "at-least-12-characters"
+}
 ```
+
+Rules:
+
+- `email` must be a valid email.
+- `username` must be 3-30 characters and only contain letters, numbers, and underscores.
+- `password` must be 12-128 characters.
+
+Response:
+
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "player@example.com",
+    "username": "player_123"
+  }
+}
+```
+
+Common errors:
+
+- `409` if email or username is already registered.
+- `400` if validation fails.
+
+#### `POST /api/auth/login`
+
+Logs in with email or username and password. Sets `access_token` and `refresh_token` cookies.
+
+Request body:
+
+```json
+{
+  "login": "player@example.com",
+  "password": "at-least-12-characters"
+}
+```
+
+Response:
+
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "player@example.com",
+    "username": "player_123"
+  }
+}
+```
+
+Common errors:
+
+- `401` if the credentials are wrong, the account has no password login, or the account is not active.
+
+#### `POST /api/auth/refresh`
+
+Uses the `refresh_token` cookie to rotate the session and issue fresh cookies.
+
+Request body: none.
+
+Response:
+
+```json
+{
+  "refreshed": true
+}
+```
+
+Common errors:
+
+- `401` if the refresh cookie is missing, expired, invalid, or already revoked.
+
+#### `POST /api/auth/logout`
+
+Requires login. Revokes the current session and clears auth cookies.
+
+Request body: none.
+
+Response:
+
+```json
+{
+  "loggedOut": true
+}
+```
+
+#### `GET /api/auth/me`
+
+Requires login. Returns the current logged-in user.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "email": "player@example.com",
+  "username": "player_123",
+  "createdAt": "2026-06-24T12:00:00.000Z"
+}
+```
+
+#### `GET /api/auth/google`
+
+Starts Google OAuth. The browser is redirected to Google.
+
+Request body: none.
+
+Response:
+
+- Redirects to Google if `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` are configured.
+- Returns `503` if Google OAuth is not configured.
+
+#### `GET /api/auth/google/callback`
+
+Google redirects here after OAuth. The backend creates or links a local user, sets auth cookies, and redirects to `FRONTEND_URL`.
+
+This route is normally called by Google, not manually by the frontend.
+
+### Wallet
+
+#### `GET /api/wallet`
+
+Requires login. Returns the logged-in user's betting wallet balance.
+
+Response:
+
+```json
+{
+  "balance": "0",
+  "currency": "GBP"
+}
+```
+
+### Banking
+
+#### `GET /api/banking`
+
+Requires login. Returns the user's bank connections, cached current accounts, recent current account transactions, deposit records, and payout records.
+
+Response:
+
+```json
+{
+  "mode": "sandbox",
+  "connections": [
+    {
+      "id": "uuid",
+      "provider": "true_layer",
+      "status": "active",
+      "consentExpiresAt": "2026-07-24T12:00:00.000Z",
+      "authorizationUri": "https://..."
+    }
+  ],
+  "accounts": [
+    {
+      "id": "uuid",
+      "displayName": "Current Account",
+      "accountType": "transaction",
+      "currency": "GBP",
+      "currentBalance": "123450"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "uuid",
+      "bankAccountId": "uuid",
+      "amount": "-1000",
+      "currency": "GBP",
+      "direction": "outbound",
+      "description": "Coffee shop",
+      "merchantName": "Example Coffee",
+      "category": "eating_out",
+      "transactionAt": "2026-06-24T12:00:00.000Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "uuid",
+      "amount": "1000",
+      "currency": "GBP",
+      "status": "succeeded",
+      "providerPaymentId": "truelayer-payment-id",
+      "sourceTransactionId": "uuid-or-null",
+      "createdAt": "2026-06-24T12:00:00.000Z",
+      "settledAt": "2026-06-24T12:01:00.000Z"
+    }
+  ],
+  "payouts": [
+    {
+      "id": "uuid",
+      "amount": "2000",
+      "currency": "GBP",
+      "status": "pending",
+      "providerPayoutId": "truelayer-payout-id",
+      "createdAt": "2026-06-24T12:00:00.000Z",
+      "settledAt": null
+    }
+  ]
+}
+```
+
+#### `POST /api/banking/connect`
+
+Requires login. Starts an Open Banking connection.
+
+Request body: none.
+
+Response when user must authorise with TrueLayer:
+
+```json
+{
+  "authorizationUri": "https://app.truelayer-sandbox.com/...",
+  "connection": {
+    "id": "uuid",
+    "provider": "true_layer",
+    "status": "authorization_required",
+    "consentExpiresAt": null,
+    "authorizationUri": "https://app.truelayer-sandbox.com/..."
+  },
+  "overview": {
+    "mode": "sandbox",
+    "connections": [],
+    "accounts": [],
+    "transactions": [],
+    "payments": [],
+    "payouts": []
+  }
+}
+```
+
+Response when the connection can be completed without a hosted redirect:
+
+```json
+{
+  "overview": {
+    "mode": "sandbox",
+    "connections": [],
+    "accounts": [],
+    "transactions": [],
+    "payments": [],
+    "payouts": []
+  }
+}
+```
+
+#### `GET /api/banking/truelayer/callback`
+
+TrueLayer redirects here after the hosted Open Banking connection flow.
+
+Query parameters may include:
+
+- `connection_id`
+- `connectionId`
+- `error`
+
+Response:
+
+- Redirects to `FRONTEND_URL?banking=connected` on success.
+- Redirects to `FRONTEND_URL?banking=error` on failure.
+
+This route is normally called by TrueLayer, not manually by the frontend.
+
+#### `POST /api/banking/sync`
+
+Requires login. Fetches/caches bank accounts and transactions from the configured provider, then returns the same shape as `GET /api/banking`.
+
+Request body: none.
+
+Response: banking overview object.
+
+#### `POST /api/banking/deposits`
+
+Requires login. Creates a deposit/pay-in from the current account into the betting wallet. In sandbox mode this usually returns a hosted payment URL that the frontend redirects to.
+
+Request body:
+
+```json
+{
+  "amount": 1000,
+  "sourceTransactionId": "optional-uuid"
+}
+```
+
+Rules:
+
+- `amount` must be a positive integer in pence.
+- `sourceTransactionId` is optional. If provided, it must belong to the logged-in user's cached bank transactions.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "status": "pending",
+  "amount": "1000",
+  "currency": "GBP",
+  "newBalance": "1000",
+  "authorizationUri": "https://app.truelayer-sandbox.com/..."
+}
+```
+
+Notes:
+
+- `newBalance` is only present when the wallet balance changed immediately.
+- `authorizationUri` is present when the user must complete a hosted TrueLayer payment.
+
+#### `GET /api/banking/truelayer/payment-callback`
+
+TrueLayer redirects here after the hosted payment flow.
+
+Query parameters may include:
+
+- `payment_id`
+- `paymentId`
+- `bankingPaymentId`
+- `error`
+
+Response:
+
+- Redirects to `FRONTEND_URL?payment=succeeded`, `pending`, `failed`, or `error`.
+
+This route is normally called by TrueLayer, not manually by the frontend.
+
+#### `POST /api/banking/deposits/refresh`
+
+Requires login. Checks pending TrueLayer deposits and credits the wallet if the provider status has become creditable.
+
+Request body: none.
+
+Response: banking overview object.
+
+#### `POST /api/banking/payouts`
+
+Requires login. Creates a payout/withdrawal from the betting wallet back to the latest valid TrueLayer payment source.
+
+Request body:
+
+```json
+{
+  "amount": 1000
+}
+```
+
+Rules:
+
+- `amount` must be a positive integer in pence.
+- User must have enough betting wallet balance.
+- For closed-loop TrueLayer payouts, the user usually needs at least one successful previous deposit with a `paymentSourceId`.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "status": "pending",
+  "amount": "1000",
+  "currency": "GBP",
+  "newBalance": "0"
+}
+```
+
+Common errors:
+
+- `422` if the wallet balance is insufficient.
+- `400` or `503` if the TrueLayer payout cannot be created or no valid payment source exists.
+
+### Bets
+
+#### `GET /api/bets`
+
+Requires login. Returns up to 50 recent bets for the current user.
+
+Response:
+
+```json
+[
+  {
+    "id": "uuid",
+    "gameType": "coin_flip",
+    "stake": "1000",
+    "selection": "heads",
+    "result": "heads",
+    "payout": "2000",
+    "status": "settled",
+    "serverSeedHash": "sha256-hash",
+    "rngNonce": "1",
+    "createdAt": "2026-06-24T12:00:00.000Z",
+    "settledAt": "2026-06-24T12:00:00.000Z"
+  }
+]
+```
+
+#### `POST /api/bets/coin-flip`
+
+Requires login. Places and settles a coin flip bet server-side.
+
+Request body:
+
+```json
+{
+  "stake": 1000,
+  "selection": "heads",
+  "clientSeed": "optional-client-seed"
+}
+```
+
+Rules:
+
+- `stake` must be a positive integer in pence and at most `1000000000`.
+- `selection` must be `heads` or `tails`.
+- `clientSeed` is optional and max 128 characters.
+- The user must have enough betting wallet balance.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "gameType": "coin_flip",
+  "selection": "heads",
+  "result": "tails",
+  "stake": "1000",
+  "payout": "0",
+  "newBalance": "0",
+  "serverSeedHash": "sha256-hash",
+  "serverSeed": "revealed-server-seed",
+  "rngNonce": "1",
+  "settledAt": "2026-06-24T12:00:00.000Z"
+}
+```
+
+#### `POST /api/bets/roulette`
+
+Requires login. Places and settles a roulette bet server-side.
+
+Request body for a colour bet:
+
+```json
+{
+  "stake": 1000,
+  "betType": "colour",
+  "selection": "red",
+  "clientSeed": "optional-client-seed"
+}
+```
+
+Request body for a number bet:
+
+```json
+{
+  "stake": 1000,
+  "betType": "number",
+  "selection": "17",
+  "clientSeed": "optional-client-seed"
+}
+```
+
+Rules:
+
+- `stake` must be a positive integer in pence and at most `1000000000`.
+- `betType` must be `colour` or `number`.
+- For `colour`, `selection` must be `red`, `black`, or `green`.
+- For `number`, `selection` must be a string containing an integer from `0` to `36`.
+- `clientSeed` is optional and max 128 characters.
+- The user must have enough betting wallet balance.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "gameType": "roulette",
+  "selection": "colour:red",
+  "result": "red:23",
+  "stake": "1000",
+  "payout": "2000",
+  "newBalance": "2000",
+  "serverSeedHash": "sha256-hash",
+  "serverSeed": "revealed-server-seed",
+  "rngNonce": "2",
+  "settledAt": "2026-06-24T12:00:00.000Z"
+}
+```
+
+Common errors:
+
+- `400` if validation fails.
+- `401` if not logged in.
+- `422` if the wallet balance is insufficient.

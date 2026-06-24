@@ -19,32 +19,32 @@ header { display: flex; align-items: center; justify-content: space-between; }
 h1 { margin: 0; font-size: 3rem; letter-spacing: -0.06em; }
 h2, h3 { margin-top: 0; }
 .eyebrow { margin: 0 0 0.25rem; color: #83a298; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.12em; }
-.warning, .message { padding: 0.85rem 1rem; border: 1px solid #614d22; border-radius: 8px; background: #201b0d; }
-.message { border-color: #275744; background: #10251e; }
+.message { padding: 0.85rem 1rem; border: 1px solid #275744; border-radius: 8px; background: #10251e; }
 .auth-grid, .play-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 2rem; }
-form, .history, .account, .banking { padding: 1.5rem; border: 1px solid #263c35; border-radius: 12px; background: #101b17; }
+form, .history, .single-action, .transaction-page { padding: 1.5rem; border: 1px solid #263c35; border-radius: 12px; background: #101b17; }
 form { display: flex; flex-direction: column; gap: 1rem; }
+.single-action { display: grid; gap: 1.25rem; margin-top: 2rem; text-align: center; justify-items: center; padding: 3rem 1.5rem; }
+.single-action button { width: min(100%, 320px); }
+.transaction-page { margin-top: 2rem; }
+.summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+.summary-card, .stake-display { display: grid; gap: 0.35rem; padding: 1rem; border: 1px solid #263c35; border-radius: 10px; background: #0b1512; }
+.summary-card span, .stake-display span { color: #83a298; }
+.summary-card strong, .stake-display strong { font-size: 1.35rem; }
+.stake-panel { display: grid; grid-template-columns: 1fr auto; align-items: end; margin: 1rem 0; }
 .game-toggle { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
 .game-toggle .active { background: #61e6af; color: #07100d; }
 label { display: grid; gap: 0.4rem; color: #b9cbc5; }
 input, select { width: 100%; padding: 0.7rem; color: #e8edf2; border: 1px solid #385047; border-radius: 7px; background: #09110f; }
-.account { display: flex; justify-content: space-between; margin-top: 2rem; }
-.account div { display: grid; gap: 0.25rem; }
-.account span, small, .muted { color: #83a298; }
-.account strong { font-size: 1.4rem; }
-.banking { margin-top: 1rem; }
+small, .muted { color: #83a298; }
 .section-heading, .button-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
-.banking-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; }
-.bank-card, .mini-form { padding: 1rem; border: 1px solid #263c35; border-radius: 10px; background: #0b1512; }
-.mini-form { gap: 0.75rem; }
-.bank-account { display: grid; gap: 0.35rem; padding-top: 0.75rem; border-top: 1px solid #263c35; }
 .transactions { margin-top: 1.5rem; }
 .transactions ol { list-style: none; padding: 0; margin: 0; }
 .transactions li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid #263c35; }
+.transactions li.selected { background: rgba(97, 230, 175, 0.08); }
 .transactions li div:first-child { display: grid; gap: 0.2rem; }
 .history ol { list-style: none; padding: 0; margin: 0; }
 .history li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid #263c35; }
 
 @media (max-width: 650px) {
-  .auth-grid, .play-grid, .banking-grid, .transactions li { grid-template-columns: 1fr; }
+  .auth-grid, .play-grid, .summary-grid, .stake-panel, .transactions li { grid-template-columns: 1fr; }
 }
