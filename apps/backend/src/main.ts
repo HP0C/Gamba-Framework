@@ -13,8 +13,13 @@ async function bootstrap(): Promise<void> {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
+  const frontendOrigins = config
+    .getOrThrow<string>('FRONTEND_URL')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: config.getOrThrow<string>('FRONTEND_URL'),
+    origin: frontendOrigins,
     credentials: true,
   });
 

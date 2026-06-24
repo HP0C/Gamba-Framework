@@ -87,16 +87,20 @@ export class AuthController {
   }
 
   private cookieOptions() {
-    const isProduction = this.config.get('NODE_ENV') === 'production';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') ?? '';
+    const isLocalFrontend =
+      frontendUrl.startsWith('http://localhost') || frontendUrl.startsWith('http://127.0.0.1');
+    const useCrossSiteCookies = !isLocalFrontend;
+
     return {
       // httpOnly means frontend JavaScript cannot read the token values directly.
       httpOnly: true,
-      // Localhost development uses plain HTTP; production cookies must require HTTPS.
-      secure: isProduction,
+      // Localhost development uses plain HTTP; deployed frontend/backend URLs use HTTPS.
+      secure: useCrossSiteCookies,
       // Vercel and Render are different sites. Production API cookies therefore
       // need SameSite=None so the browser includes them on frontend -> backend
       // fetch requests. Localhost can stay Lax because it often runs over HTTP.
-      sameSite: (isProduction ? 'none' : 'lax') as 'none' | 'lax',
+      sameSite: (useCrossSiteCookies ? 'none' : 'lax') as 'none' | 'lax',
       path: '/',
     };
   }
