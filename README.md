@@ -11,6 +11,7 @@ apps/
     src/
       auth/                 password, Google OAuth structure, JWT sessions
       users/ wallet/ bets/  controllers, services, managers, modules
+      banking/              local mock banking plus TrueLayer Data/Payments sandbox
       audit/ prisma/        server-owned support modules
     test/
   frontend/                 React/Vite client
@@ -28,7 +29,7 @@ Requirements: Docker with Compose v2.
 docker compose up --build
 ```
 
-Open the UI at <http://localhost:5173>; the API is at <http://localhost:3000/api>. The backend waits for PostgreSQL and runs `prisma migrate deploy` before starting. Local Compose defaults issue new password accounts GBP 100.00 of explicitly labeled demo credit through a ledger transaction.
+Open the UI at <http://localhost:5173>; the API is at <http://localhost:3000/api>. The backend waits for PostgreSQL and runs `prisma migrate deploy` before starting. Local Compose defaults issue new password accounts GBP 100.00 of explicitly labeled demo credit through a ledger transaction. If `TRUELAYER_MODE=mock`, the banking panel works offline with local sample banking data. If `TRUELAYER_MODE=sandbox`, paste sandbox keys into the root `.env` before using the banking buttons.
 
 Set non-demo secrets in a root `.env` before sharing any environment:
 
@@ -37,6 +38,18 @@ JWT_ACCESS_SECRET=generate-a-long-random-secret
 JWT_REFRESH_SECRET=generate-a-different-long-random-secret
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+TRUELAYER_MODE=mock
+TRUELAYER_CLIENT_ID=
+TRUELAYER_CLIENT_SECRET=
+TRUELAYER_REDIRECT_URI=http://localhost:3000/api/banking/truelayer/callback
+TRUELAYER_MERCHANT_ACCOUNT_ID=
+TRUELAYER_CERTIFICATE_ID=
+TRUELAYER_PRIVATE_KEY=
+TRUELAYER_DATA_PROVIDER_ID=uk-cs-mock
+TRUELAYER_PAYMENT_PROVIDER_ID=mock-payments-gb-redirect
+TRUELAYER_PAYMENT_RETURN_URI=http://localhost:3000/api/banking/truelayer/payment-callback
+TRUELAYER_PAYMENT_HPP_BASE_URL=https://app.truelayer-sandbox.com/payments
+TRUELAYER_CREDIT_DEPOSITS_ON=executed
 ```
 
 The committed Compose fallbacks are localhost-only development values, not deployable secrets.
@@ -79,6 +92,89 @@ npm run prisma:studio
 
 Access and refresh JWTs use secure, HTTP-only, SameSite=Lax cookies. Refresh tokens are Argon2id-hashed in revocable database sessions. Cookies are non-`Secure` only in localhost development; production needs HTTPS, deliberate proxy/cookie-domain configuration, CSRF review, rate limiting, credential-stuffing protection, breached-password policy, and secret rotation.
 
+## Banking And TrueLayer Sandbox
+
+The banking module is deliberately separate from betting:
+
+- `POST /api/banking/connect` starts a banking connection using the configured provider mode.
+- `POST /api/banking/mock/connect` is kept as a backwards-compatible alias.
+- `GET /api/banking/truelayer/callback` receives the browser redirect after a TrueLayer sandbox hosted connection flow.
+- `GET /api/banking/truelayer/payment-callback` receives the browser redirect after a TrueLayer sandbox payment hosted page flow.
+- `POST /api/banking/sync` refreshes cached account and transaction data.
+- `GET /api/banking` returns connections, bank accounts, recent external bank transactions, deposits, and payouts.
+- `POST /api/banking/deposits` creates a deposit. In mock mode it credits immediately. In sandbox mode it creates a signed TrueLayer Payments v3 pay-in and returns an `authorizationUri`; the wallet is credited only after the payment status is confirmed as executed or settled.
+- `POST /api/banking/deposits/refresh` checks pending TrueLayer sandbox deposits and credits executed/settled payments.
+- `POST /api/banking/payouts` reserves wallet funds, then in sandbox mode attempts a closed-loop TrueLayer payout to the payment source from the latest successful deposit.
+
+The app never treats external bank transactions as spendable betting balance. They are read-only provider data used for display and amount suggestions. The wallet is still the only balance that bets can spend.
+
+Provider modes:
+
+- `TRUELAYER_MODE=mock`: all banking data is local hardcoded sample data.
+- `TRUELAYER_MODE=sandbox`: account and transaction data comes from TrueLayer Data API sandbox when your Console app has Data API access. If TrueLayer returns `invalid_scope` for Data API, the app falls back to local sandbox sample transactions while Payments still use TrueLayer. Deposits use signed TrueLayer Payments v3 sandbox pay-ins through the hosted payment page. Payouts use closed-loop sandbox payouts after a successful deposit has created a payment source.
+- `TRUELAYER_MODE=live`: intentionally blocked with 503.
+
+To try TrueLayer sandbox, create a sandbox app in TrueLayer Console. Register these redirect URIs:
+
+```text
+http://localhost:3000/api/banking/truelayer/callback
+http://localhost:3000/api/banking/truelayer/payment-callback
+```
+
+The payment callback must be registered exactly as shown. Do not add query parameters such as `?bankingPaymentId=...` in the TrueLayer Console redirect URI.
+
+Then paste your values into the root `.env` file:
+
+```env
+TRUELAYER_MODE=sandbox
+TRUELAYER_CLIENT_ID=your-sandbox-client-id
+TRUELAYER_CLIENT_SECRET=your-sandbox-client-secret
+TRUELAYER_MERCHANT_ACCOUNT_ID=your-sandbox-merchant-account-id
+TRUELAYER_CERTIFICATE_ID=your-signing-key-kid-from-console
+TRUELAYER_PRIVATE_KEY="-----BEGIN EC PRIVATE KEY-----\nPASTE_YOUR_PRIVATE_KEY_HERE\n-----END EC PRIVATE KEY-----"
+TRUELAYER_DATA_PROVIDER_ID=uk-cs-mock
+TRUELAYER_PAYMENT_PROVIDER_ID=mock-payments-gb-redirect
+TRUELAYER_CREDIT_DEPOSITS_ON=executed
+```
+
+For the signing key, generate an ES512-compatible EC key pair locally, upload the public key in TrueLayer Console, and paste only the private key into `.env`:
+
+```bash
+openssl ecparam -name secp521r1 -genkey -noout -out truelayer-private-key.pem
+openssl ec -in truelayer-private-key.pem -pubout -out truelayer-public-key.pem
+```
+
+`TRUELAYER_PRIVATE_KEY` is the contents of `truelayer-private-key.pem`, with newlines written as `\n` if you keep it on one `.env` line. `TRUELAYER_CERTIFICATE_ID` is the key id/kid shown by TrueLayer for the uploaded public key.
+
+Then restart Docker:
+
+```bash
+docker compose up --build
+```
+
+The private key must stay local. Do not paste it into chat, commit it, or put it in `.env.example`. The `\n` characters are intentional: they let a multi-line PEM key live on one `.env` line.
+
+Current sandbox behaviour:
+
+- Connect bank: redirects through TrueLayer's Data API sandbox connection flow when Data API is enabled. If your app credentials only have Payments scope, it uses a local sandbox transaction feed instead of failing with `invalid_scope`.
+- Deposit: creates a signed `/v3/payments` request, sends the user to TrueLayer's hosted payment page, then checks `/v3/payments/{id}` after redirect or when `Refresh payments` is clicked.
+- Wallet credit: happens only when the provider result maps to `SUCCEEDED`. The app treats TrueLayer `executed` and `settled` deposits as creditable for sandbox learning. Set `TRUELAYER_CREDIT_DEPOSITS_ON=authorized` only if you deliberately want even earlier crediting during experiments.
+- Payout: uses a signed `/v3/payouts` closed-loop request when a previous successful deposit has a `payment_source_id`. It still needs webhooks/reconciliation before you would rely on it outside a learning sandbox.
+
+Important boundary: wagers do not change the TrueLayer merchant account. A deposit moves money from the user's bank to the merchant account and credits the app wallet. A payout moves money from the merchant account back to the user and debits the app wallet. Bets happen inside the app wallet ledger only.
+
+In Prisma Studio:
+
+- `BankConnection` is a user's consent/connection to the mock provider or TrueLayer sandbox provider. `authorization_required` means the user has not finished TrueLayer's hosted flow yet.
+- `ExternalBankAccount` is a bank account returned by the provider.
+- `ExternalBankTransaction` is a cached transaction from that bank account.
+- `BankingPayment` is an app-side deposit/pay-in record. `pending` means the user has not completed or settled the TrueLayer payment yet, `succeeded` means the wallet has been credited, and `failed` means it should not credit the wallet.
+- `BankingPayout` is an app-side payout/withdrawal record.
+- `WalletTransaction.referenceType` tells you what caused the wallet movement, for example `BANKING_PAYMENT`, `BANKING_PAYOUT`, or `BET`.
+- `WalletTransaction.referenceId` points to the row id in that referenced table.
+
+`TRUELAYER_MODE=live` currently returns a 503 on purpose. To make it real, implement `LiveTrueLayerProvider` with production TrueLayer base URLs, request signing/idempotency, hosted payment/auth redirects, webhooks, reconciliation, and failure/refund handling.
+
 ## Server-Side Betting
 
 `POST /api/bets/coin-flip` accepts a positive integer stake, `heads`/`tails`, and an optional client seed. `POST /api/bets/roulette` accepts a positive integer stake, a `number` or `colour` bet type, a validated selection, and an optional client seed. Both endpoints use the same server-side settlement pipeline. The API:
@@ -110,7 +206,8 @@ docker compose config
 
 ## Current Limitations
 
-- Demo credits only; no deposits, withdrawals, payments, or cash value.
+- Demo credits only; the TrueLayer sandbox integration is for learning and has no real cash value.
+- TrueLayer live mode and real payouts are intentionally not implemented yet.
 - Compliance state fields are placeholders and are not enforced as a complete policy.
 - Google linking needs production collision/account-takeover review and configured credentials.
 - No email verification, password reset, MFA, CSRF tokens, rate limiting, device/risk scoring, observability, or admin tooling.

@@ -34,6 +34,28 @@ enum WalletTransactionType {
   WITHDRAWAL
 }
 
+enum BankingProvider {
+  TRUE_LAYER
+}
+
+enum BankingConnectionStatus {
+  AUTHORIZATION_REQUIRED
+  ACTIVE
+  REVOKED
+  ERROR
+}
+
+enum BankingPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum ExternalTransactionDirection {
+  INBOUND
+  OUTBOUND
+}
+
 enum BetStatus {
   PENDING
   SETTLED
@@ -63,6 +85,9 @@ model User {
   bets                   Bet[]
   gameRounds             GameRound[]
   auditLogs               AuditLog[]
+  bankConnections        BankConnection[]
+  bankingPayments        BankingPayment[]
+  bankingPayouts         BankingPayout[]
 }
 
 model Account {
@@ -101,6 +126,8 @@ model Wallet {
   updatedAt    DateTime            @updatedAt
   user         User                @relation(fields: [userId], references: [id], onDelete: Restrict)
   transactions WalletTransaction[]
+  bankingPayments BankingPayment[]
+  bankingPayouts  BankingPayout[]
 
   @@unique([userId, currency])
 }
@@ -120,6 +147,106 @@ model WalletTransaction {
 
   @@index([walletId, createdAt])
   @@index([referenceType, referenceId])
+}
+
+model BankConnection {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  userId               String                  @db.Uuid
+  provider             BankingProvider
+  providerConnectionId String
+  status               BankingConnectionStatus @default(ACTIVE)
+  consentExpiresAt     DateTime?
+  metadata             Json?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  user                 User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts             ExternalBankAccount[]
+
+  @@unique([provider, providerConnectionId])
+  @@index([userId])
+}
+
+model ExternalBankAccount {
+  id                String                    @id @default(uuid()) @db.Uuid
+  connectionId      String                    @db.Uuid
+  providerAccountId String
+  displayName       String
+  accountType       String
+  currency          String                    @default("GBP") @db.VarChar(3)
+  currentBalance    BigInt                    @default(0)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  connection        BankConnection            @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  transactions      ExternalBankTransaction[]
+
+  @@unique([connectionId, providerAccountId])
+  @@index([connectionId])
+}
+
+model ExternalBankTransaction {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  bankAccountId         String                       @db.Uuid
+  providerTransactionId String
+  amount                BigInt
+  currency              String                       @default("GBP") @db.VarChar(3)
+  direction             ExternalTransactionDirection
+  description           String
+  merchantName          String?
+  category              String?
+  transactionAt         DateTime
+  raw                   Json?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  bankAccount           ExternalBankAccount          @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  usedForPayments       BankingPayment[]
+
+  @@unique([bankAccountId, providerTransactionId])
+  @@index([bankAccountId, transactionAt])
+}
+
+model BankingPayment {
+  id                  String                   @id @default(uuid()) @db.Uuid
+  userId              String                   @db.Uuid
+  walletId            String                   @db.Uuid
+  sourceTransactionId String?                  @db.Uuid
+  provider            BankingProvider
+  providerPaymentId   String
+  paymentSourceId     String?
+  amount              BigInt
+  currency            String                   @default("GBP") @db.VarChar(3)
+  status              BankingPaymentStatus     @default(PENDING)
+  idempotencyKey      String                   @unique
+  raw                 Json?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  settledAt           DateTime?
+  user                User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  wallet              Wallet                   @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  sourceTransaction   ExternalBankTransaction? @relation(fields: [sourceTransactionId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerPaymentId])
+  @@index([userId, createdAt])
+}
+
+model BankingPayout {
+  id                String               @id @default(uuid()) @db.Uuid
+  userId            String               @db.Uuid
+  walletId          String               @db.Uuid
+  provider          BankingProvider
+  providerPayoutId  String
+  amount            BigInt
+  currency          String               @default("GBP") @db.VarChar(3)
+  status            BankingPaymentStatus @default(PENDING)
+  idempotencyKey    String               @unique
+  raw               Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  settledAt         DateTime?
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  wallet            Wallet               @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerPayoutId])
+  @@index([userId, createdAt])
 }
 
 model Bet {

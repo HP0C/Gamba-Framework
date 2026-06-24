@@ -1,0 +1,1 @@
+ALTER TYPE "BankingConnectionStatus" ADD VALUE 'AUTHORIZATION_REQUIRED';
