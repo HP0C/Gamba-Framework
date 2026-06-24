@@ -82,6 +82,18 @@ JWT_ACCESS_SECRET=replace-with-a-long-random-secret
 JWT_REFRESH_SECRET=replace-with-another-long-random-secret
 ```
 
+## Deploy Frontend To Vercel
+
+The frontend should call the backend through Vercel's same-origin `/api` rewrite. This avoids browsers treating Render auth cookies as third-party cookies.
+
+In Vercel, either remove `VITE_API_URL` or set it to:
+
+```env
+VITE_API_URL=/api
+```
+
+The file `apps/frontend/vercel.json` rewrites `/api/*` to the Render backend. If your Vercel project root is the repository root instead of `apps/frontend`, copy that rewrite into a root `vercel.json` or change the Vercel project root to `apps/frontend`.
+
 ## Authentication
 
 - `POST /api/auth/register` creates a local user and Argon2id password hash.
