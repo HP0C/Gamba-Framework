@@ -3,6 +3,7 @@ import { API_URL, api } from './api';
 import {
   BankTransaction,
   BankingConnectResult,
+  BankingMandateResult,
   BankingMoneyMovementResult,
   BankingOverview,
   Bet,
@@ -11,7 +12,7 @@ import {
   Wallet,
 } from './types';
 
-type AppPage = 'connect' | 'transactions' | 'bet';
+type AppPage = 'connect' | 'mandate' | 'transactions' | 'bet';
 type GameChoice = 'coin_flip' | 'roulette';
 type RouletteBetType = 'number' | 'colour';
 
@@ -41,6 +42,24 @@ function isPositiveMinor(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function hasBankingConnection(overview: BankingOverview | null): boolean {
+  return Boolean(
+    overview?.accounts.length ||
+      overview?.transactions.length ||
+      overview?.connections.some((connection) => connection.status === 'active'),
+  );
+}
+
+function hasAuthorizedMandate(overview: BankingOverview | null): boolean {
+  return Boolean(overview?.mandates?.some((mandate) => mandate.status === 'authorized'));
+}
+
+function nextSetupPage(overview: BankingOverview | null): AppPage {
+  if (!hasBankingConnection(overview)) return 'connect';
+  if (!hasAuthorizedMandate(overview)) return 'mandate';
+  return 'transactions';
 }
 
 export default function App() {
@@ -80,13 +99,8 @@ export default function App() {
 
   useEffect(() => void loadAccount(), [loadAccount]);
 
-  const hasOpenBankingConnection = useMemo(
-    () =>
-      Boolean(
-        banking?.accounts.length ||
-          banking?.transactions.length ||
-          banking?.connections.some((connection) => connection.status === 'active'),
-      ),
+  const authorizedMandate = useMemo(
+    () => banking?.mandates?.find((mandate) => mandate.status === 'authorized') ?? null,
     [banking],
   );
 
@@ -95,14 +109,16 @@ export default function App() {
 
   useEffect(() => {
     if (!user || page === 'bet') return;
-    setPage(hasOpenBankingConnection ? 'transactions' : 'connect');
-  }, [hasOpenBankingConnection, page, user]);
+    const setupPage = nextSetupPage(banking);
+    if (page !== setupPage) setPage(setupPage);
+  }, [banking, page, user]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const bankingStatus = params.get('banking');
     const paymentStatus = params.get('payment');
-    if (!bankingStatus && !paymentStatus) return;
+    const mandateStatus = params.get('mandate');
+    if (!bankingStatus && !paymentStatus && !mandateStatus) return;
 
     async function handleReturn() {
       if (bankingStatus) {
@@ -110,11 +126,11 @@ export default function App() {
           try {
             const overview = await api.post<BankingOverview>('/banking/sync');
             setBanking(overview);
-            setPage('transactions');
-            setMessage('Open Banking connected. Choose an amount to stake.');
+            setPage(nextSetupPage(overview));
+            setMessage('Open Banking connected. Set your reusable deposit limits next.');
           } catch (error) {
-            await loadAccount();
-            setPage('transactions');
+            const snapshot = await loadAccount();
+            setPage(nextSetupPage(snapshot?.banking ?? null));
             setMessage(error instanceof Error ? error.message : 'Open Banking connected, but transactions could not sync yet.');
           }
         } else {
@@ -140,6 +156,17 @@ export default function App() {
         }
       }
 
+      if (mandateStatus) {
+        const snapshot = await loadAccount();
+        const nextPage = nextSetupPage(snapshot?.banking ?? null);
+        setPage(nextPage);
+        setMessage(
+          mandateStatus === 'authorized'
+            ? 'Reusable Open Banking deposits are authorised. Choose an amount to stake.'
+            : 'Open Banking mandate authorisation did not complete.',
+        );
+      }
+
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
@@ -154,7 +181,7 @@ export default function App() {
       form.reset();
       setUser(snapshot.user);
       const account = await loadAccount();
-      setPage(account && hasOpenBankingConnection ? 'transactions' : 'connect');
+      setPage(nextSetupPage(account?.banking ?? null));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Authentication failed');
     }
@@ -181,8 +208,8 @@ export default function App() {
         window.location.assign(result.authorizationUri);
         return;
       }
-      setPage('transactions');
-      setMessage('Open Banking connected. Choose an amount to stake.');
+      setPage(nextSetupPage(result.overview));
+      setMessage('Open Banking connected. Set your reusable deposit limits next.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not connect Open Banking');
     }
@@ -196,6 +223,41 @@ export default function App() {
       setMessage('Current account transactions synced.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not sync transactions');
+    }
+  }
+
+  async function createMandate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage('');
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+
+    try {
+      const result = await api.post<BankingMandateResult>('/banking/mandates', {
+        maximumIndividualAmount: Number(data.maximumIndividualAmount),
+        dailyLimit: Number(data.dailyLimit),
+        validDays: Number(data.validDays || 365),
+      });
+      setBanking((current) =>
+        current
+          ? {
+              ...current,
+              mandates: [
+                result.mandate,
+                ...(current.mandates ?? []).filter((mandate) => mandate.id !== result.mandate.id),
+              ],
+            }
+          : current,
+      );
+      if (result.authorizationUri) {
+        setMessage('Redirecting to authorise reusable Open Banking deposits...');
+        window.location.assign(result.authorizationUri);
+        return;
+      }
+      if (result.mandate.status === 'authorized') setPage('transactions');
+      setMessage('Reusable Open Banking deposit permission was created.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not create Open Banking mandate');
     }
   }
 
@@ -234,8 +296,10 @@ export default function App() {
     }
 
     try {
-      const result = await api.post<BankingMoneyMovementResult>('/banking/deposits', {
+      const depositPath = authorizedMandate ? '/banking/mandate-deposits' : '/banking/deposits';
+      const result = await api.post<BankingMoneyMovementResult>(depositPath, {
         amount: Number(selectedStake),
+        mandateId: authorizedMandate?.id,
         sourceTransactionId: stakeSourceTransactionId,
       });
       sessionStorage.setItem(PENDING_STAKE_KEY, selectedStake);
@@ -246,13 +310,58 @@ export default function App() {
         return;
       }
 
+      if (result.status !== 'succeeded' || !result.newBalance) {
+        if (result.status === 'failed') sessionStorage.removeItem(PENDING_STAKE_KEY);
+        setMessage(
+          result.status === 'failed'
+            ? 'The deposit failed, so no money was added to your wallet.'
+            : 'The deposit is still processing. Refresh payments in a moment, then continue to bet.',
+        );
+        await loadAccount();
+        return;
+      }
+
       if (result.newBalance) {
         setWallet((current) => current && { ...current, balance: result.newBalance ?? current.balance });
       }
+      sessionStorage.removeItem(PENDING_STAKE_KEY);
       setPage('bet');
       setMessage('Stake deposited into your betting wallet. Choose a game to continue.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Deposit failed');
+    }
+  }
+
+  async function requestWalletPayout(amount: string): Promise<string> {
+    const payout = await api.post<BankingMoneyMovementResult>('/banking/payouts', {
+      amount: Number(amount),
+    });
+
+    if (payout.status === 'succeeded') {
+      return `${formatMinor(payout.amount, payout.currency)} was paid back to your current account.`;
+    }
+    if (payout.status === 'pending') {
+      return `${formatMinor(payout.amount, payout.currency)} payout has been requested and is pending.`;
+    }
+    return `Payout status: ${payout.status}.`;
+  }
+
+  async function payoutWallet() {
+    setMessage('');
+    if (!isPositiveMinor(walletBalance)) {
+      setMessage('There is no wallet balance to pay out.');
+      return;
+    }
+
+    try {
+      const payoutMessage = await requestWalletPayout(walletBalance);
+      await loadAccount();
+      setPage('transactions');
+      setMessage(payoutMessage);
+    } catch (error) {
+      await loadAccount();
+      setPage('transactions');
+      setMessage(error instanceof Error ? `Payout failed: ${error.message}` : 'Payout failed');
     }
   }
 
@@ -289,10 +398,14 @@ export default function App() {
 
       let payoutMessage = '';
       if (isPositiveMinor(result.newBalance)) {
-        const payout = await api.post<BankingMoneyMovementResult>('/banking/payouts', {
-          amount: Number(result.newBalance),
-        });
-        payoutMessage = ` ${formatMinor(payout.amount, payout.currency)} was paid back to your current account.`;
+        try {
+          payoutMessage = ` ${await requestWalletPayout(result.newBalance)}`;
+        } catch (payoutError) {
+          payoutMessage =
+            payoutError instanceof Error
+              ? ` Payout failed: ${payoutError.message}. The winnings are still in your wallet.`
+              : ' Payout failed. The winnings are still in your wallet.';
+        }
       }
 
       form.reset();
@@ -348,6 +461,31 @@ export default function App() {
           </div>
           <button type="button" onClick={() => void connectBank()}>Connect Open Banking</button>
         </section>
+      ) : page === 'mandate' ? (
+        <section className="single-action">
+          <form className="stake-panel" onSubmit={(event) => void createMandate(event)}>
+            <div>
+              <p className="eyebrow">Step 2</p>
+              <h2>Authorise deposit limits</h2>
+              <p className="muted">
+                Set the maximum single deposit and daily deposit limit that can be used when you choose a stake.
+              </p>
+            </div>
+            <label>
+              Max individual deposit in pence
+              <input name="maximumIndividualAmount" type="number" min="1" step="1" defaultValue="1000" required />
+            </label>
+            <label>
+              Daily deposit limit in pence
+              <input name="dailyLimit" type="number" min="1" step="1" defaultValue="5000" required />
+            </label>
+            <label>
+              Valid days
+              <input name="validDays" type="number" min="1" max="365" step="1" defaultValue="365" required />
+            </label>
+            <button type="submit">Authorise deposit limits</button>
+          </form>
+        </section>
       ) : page === 'transactions' ? (
         <section className="transaction-page">
           <div className="summary-grid">
@@ -358,12 +496,17 @@ export default function App() {
             <div className="summary-card">
               <span>Betting wallet</span>
               <strong>{wallet ? formatMinor(wallet.balance, wallet.currency) : 'GBP 0.00'}</strong>
+              {isPositiveMinor(walletBalance) && (
+                <button type="button" className="secondary" onClick={() => void payoutWallet()}>
+                  Pay wallet back
+                </button>
+              )}
             </div>
           </div>
 
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Step 2</p>
+              <p className="eyebrow">Step 3</p>
               <h2>Choose how much to stake</h2>
             </div>
             <div className="button-row">
@@ -371,6 +514,19 @@ export default function App() {
               <button type="button" className="secondary" onClick={() => void refreshPendingDeposits()}>Refresh payments</button>
             </div>
           </div>
+
+          {authorizedMandate && (
+            <div className="stake-panel">
+              <div>
+                <p className="eyebrow">Reusable deposits authorised</p>
+                <h3>Deposit limits</h3>
+                <p className="muted">
+                  Individual deposit limit: {formatMinor(authorizedMandate.maximumIndividualAmount, authorizedMandate.currency)}.
+                  Daily limit: {formatMinor(authorizedMandate.dailyLimit, authorizedMandate.currency)}.
+                </p>
+              </div>
+            </div>
+          )}
 
           <form className="stake-panel" onSubmit={(event) => void proceedToBet(event)}>
             <label>
@@ -387,7 +543,7 @@ export default function App() {
                 placeholder="1000"
               />
             </label>
-            <button type="submit" disabled={!isPositiveMinor(selectedStake)}>Proceed to bet</button>
+            <button type="submit" disabled={!isPositiveMinor(selectedStake) || !authorizedMandate}>Proceed to bet</button>
           </form>
 
           <div className="transactions">
@@ -419,7 +575,7 @@ export default function App() {
       ) : (
         <section className="play-grid">
           <form onSubmit={(event) => void placeBet(event)}>
-            <p className="eyebrow">Step 3</p>
+            <p className="eyebrow">Step 4</p>
             <h2>Place your bet</h2>
             <div className="stake-display">
               <span>Stake available</span>

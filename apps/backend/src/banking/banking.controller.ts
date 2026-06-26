@@ -6,7 +6,9 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequestUser } from '../auth/request-user.decorator';
 import { BankingService } from './banking.service';
 import { CreateBankingDepositDto } from './dto/create-banking-deposit.dto';
+import { CreateBankingMandateDto } from './dto/create-banking-mandate.dto';
 import { CreateBankingPayoutDto } from './dto/create-banking-payout.dto';
+import { CreateMandateDepositDto } from './dto/create-mandate-deposit.dto';
 
 @Controller('banking')
 export class BankingController {
@@ -83,10 +85,52 @@ export class BankingController {
     return res.redirect(redirect.toString());
   }
 
+  @Get('truelayer/mandate-callback')
+  async trueLayerMandateCallback(
+    @Query('error') error: string | undefined,
+    @Query('mandate_id') snakeProviderMandateId: string | undefined,
+    @Query('mandateId') camelProviderMandateId: string | undefined,
+    @Query('payment_mandate_id') snakePaymentMandateId: string | undefined,
+    @Query('paymentMandateId') camelPaymentMandateId: string | undefined,
+    @Res() res: Response,
+  ) {
+    const redirect = new URL(this.config.getOrThrow<string>('FRONTEND_URL'));
+    const providerMandateId =
+      snakeProviderMandateId ?? camelProviderMandateId ?? snakePaymentMandateId ?? camelPaymentMandateId;
+
+    if (!providerMandateId) {
+      redirect.searchParams.set('mandate', 'error');
+      return res.redirect(redirect.toString());
+    }
+
+    try {
+      const result = await this.banking.completeTrueLayerMandateCallback({
+        error,
+        providerMandateId,
+      });
+      redirect.searchParams.set('mandate', result.status);
+    } catch {
+      redirect.searchParams.set('mandate', 'error');
+    }
+    return res.redirect(redirect.toString());
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('sync')
   syncBankData(@RequestUser() user: AuthenticatedUser) {
     return this.banking.syncBankData(user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mandates')
+  createMandate(@RequestUser() user: AuthenticatedUser, @Body() dto: CreateBankingMandateDto) {
+    return this.banking.createMandate(user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mandate-deposits')
+  createMandateDeposit(@RequestUser() user: AuthenticatedUser, @Body() dto: CreateMandateDepositDto) {
+    return this.banking.createMandateDeposit(user.userId, dto);
   }
 
   @UseGuards(JwtAuthGuard)

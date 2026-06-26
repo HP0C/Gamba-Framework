@@ -1,21 +1,28 @@
 import { BadGatewayException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BankingConnectionStatus, BankingPaymentStatus } from '@prisma/client';
-import { createPrivateKey } from 'crypto';
+import { BankingConnectionStatus, BankingMandateStatus, BankingPaymentStatus } from '@prisma/client';
+import { createPrivateKey, randomUUID } from 'crypto';
 import { HttpMethod, sign } from 'truelayer-signing';
 import {
   CreateProviderConnectionInput,
   CreateProviderDepositInput,
+  CreateProviderMandateInput,
+  CreateProviderMandatePaymentInput,
   CreateProviderPayoutInput,
   ProviderBankAccount,
   ProviderBankTransaction,
   ProviderConnection,
   ProviderDepositResult,
+  ProviderExternalPayoutBeneficiary,
+  ProviderMandateResult,
   ProviderPayoutResult,
   TrueLayerProvider,
 } from './truelayer-provider.interface';
 
 type JsonRecord = Record<string, unknown>;
+type PayoutTarget =
+  | { type: 'payment_source'; userId: string; paymentSourceId: string }
+  | { type: 'external_account'; beneficiary: ProviderExternalPayoutBeneficiary };
 
 interface TokenResponse {
   access_token: string;
@@ -65,6 +72,22 @@ interface PaymentResponse {
   status?: string;
   user?: { id?: string };
   payment_source?: { id?: string };
+  created_at?: string;
+}
+
+interface PaymentSourcesResponse {
+  items?: Array<{
+    id?: string;
+    account_holder_name?: string;
+    account_identifiers?: unknown[];
+  }>;
+}
+
+interface MandateResponse {
+  id?: string;
+  status?: string;
+  resource_token?: string;
+  user?: { id?: string };
   created_at?: string;
 }
 
@@ -221,6 +244,73 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     });
   }
 
+  async createMandate(input: CreateProviderMandateInput): Promise<ProviderMandateResult> {
+    const path = '/v3/mandates';
+    const response = await this.signedRequestJson<MandateResponse>(path, {
+      method: HttpMethod.Post,
+      body: this.createMandateBody(input),
+      idempotencyKey: input.idempotencyKey,
+      tokenScope: this.mandateTokenScope(),
+    });
+    const providerMandateId = this.requiredString(response.id, 'mandate.id');
+    const resourceToken = this.requiredString(response.resource_token, 'mandate.resource_token');
+
+    return {
+      providerMandateId,
+      providerUserId: response.user?.id,
+      status: this.mapMandateStatus(response.status),
+      authorizationUri: this.hostedMandateUri(providerMandateId, resourceToken),
+      raw: {
+        provider: 'truelayer',
+        mode: 'sandbox',
+        trueLayerStatus: response.status,
+        response: this.toRecord(response),
+      },
+    };
+  }
+
+  async getMandate(providerMandateId: string): Promise<ProviderMandateResult> {
+    const response = await this.signedRequestJson<MandateResponse>(
+      `/v3/mandates/${encodeURIComponent(providerMandateId)}`,
+      { method: HttpMethod.Get, tokenScope: this.mandateTokenScope() },
+    );
+
+    return {
+      providerMandateId: this.requiredString(response.id, 'mandate.id'),
+      providerUserId: response.user?.id,
+      status: this.mapMandateStatus(response.status),
+      raw: {
+        provider: 'truelayer',
+        mode: 'sandbox',
+        trueLayerStatus: response.status,
+        response: this.toRecord(response),
+      },
+    };
+  }
+
+  async createMandatePayment(input: CreateProviderMandatePaymentInput): Promise<ProviderDepositResult> {
+    const response = await this.signedRequestJson<PaymentResponse>('/v3/payments', {
+      method: HttpMethod.Post,
+      body: this.createMandatePaymentBody(input),
+      idempotencyKey: input.idempotencyKey,
+      tokenScope: this.mandateTokenScope(),
+    });
+
+    return {
+      providerPaymentId: this.requiredString(response.id, 'payment.id'),
+      paymentSourceId: this.paymentSourceId(response),
+      status: this.mapPaymentStatus(response.status),
+      raw: {
+        provider: 'truelayer',
+        mode: 'sandbox',
+        trueLayerStatus: response.status,
+        providerMandateId: input.providerMandateId,
+        source_transaction_id: input.sourceTransactionId ?? null,
+        response: this.toRecord(response),
+      },
+    };
+  }
+
   async createDeposit(input: CreateProviderDepositInput): Promise<ProviderDepositResult> {
     const path = '/v3/payments';
     const body = this.createPaymentBody(input);
@@ -267,14 +357,15 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
   }
 
   async createPayout(input: CreateProviderPayoutInput): Promise<ProviderPayoutResult> {
-    if (!input.paymentSourceId) {
+    const payoutTarget = await this.resolvePayoutTarget(input);
+    if (!payoutTarget) {
       throw new ServiceUnavailableException(
-        'A successful TrueLayer deposit is required before a closed-loop sandbox payout can be made.',
+        'A successful TrueLayer payment source or synced bank account details are required before a sandbox payout can be made.',
       );
     }
 
     const path = '/v3/payouts';
-    const body = this.createPayoutBody(input);
+    const body = this.createPayoutBody(input, payoutTarget);
     const response = await this.signedRequestJson<PayoutResponse>(path, {
       method: HttpMethod.Post,
       body,
@@ -288,6 +379,9 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
         provider: 'truelayer',
         mode: 'sandbox',
         trueLayerStatus: response.status,
+        payoutType: payoutTarget.type,
+        paymentSourceId: payoutTarget.type === 'payment_source' ? payoutTarget.paymentSourceId : undefined,
+        trueLayerUserId: payoutTarget.type === 'payment_source' ? payoutTarget.userId : undefined,
         response: this.toRecord(response),
       },
     };
@@ -322,11 +416,11 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     return this.accessToken('data');
   }
 
-  private async paymentsAccessToken(): Promise<string> {
-    return this.accessToken('payments');
+  private async paymentsAccessToken(scope = 'payments'): Promise<string> {
+    return this.accessToken(scope);
   }
 
-  private async accessToken(scope: 'data' | 'payments'): Promise<string> {
+  private async accessToken(scope: string): Promise<string> {
     const cached = this.cachedTokens.get(scope);
     if (cached && cached.expiresAtMs > Date.now() + 60_000) return cached.accessToken;
 
@@ -383,6 +477,7 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
       method: HttpMethod.Get | HttpMethod.Post;
       body?: JsonRecord;
       idempotencyKey?: string;
+      tokenScope?: string;
     },
   ): Promise<T> {
     const body = options.body ? JSON.stringify(options.body) : '';
@@ -392,7 +487,7 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     const signature = this.signRequest(path, options.method, signedHeaders, body);
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${await this.paymentsAccessToken()}`,
+      Authorization: `Bearer ${await this.paymentsAccessToken(options.tokenScope)}`,
       Accept: 'application/json',
       'Tl-Signature': signature,
       ...signedHeaders,
@@ -468,23 +563,178 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     };
   }
 
-  private createPayoutBody(input: CreateProviderPayoutInput): JsonRecord {
+  private createMandateBody(input: CreateProviderMandateInput): JsonRecord {
+    const providerId = this.config.get<string>('TRUELAYER_MANDATE_PROVIDER_ID', 'ob-natwest-vrp-sandbox');
+    const providerSelection = providerId
+      ? {
+          type: 'preselected',
+          provider_id: providerId,
+          scheme_selection: { type: 'instant_preferred', allow_remitter_fee: false },
+        }
+      : {
+          type: 'user_selected',
+          filter: { countries: ['GB'], customer_segments: ['retail'] },
+          scheme_selection: { type: 'instant_preferred', allow_remitter_fee: false },
+        };
+
+    return {
+      user: {
+        id: input.userId,
+        name: input.username,
+        email: input.email,
+      },
+      mandate: {
+        type: this.config.get<string>('TRUELAYER_MANDATE_TYPE', 'sweeping'),
+        provider_selection: providerSelection,
+        beneficiary: {
+          type: 'merchant_account',
+          merchant_account_id: this.requiredConfig('TRUELAYER_MERCHANT_ACCOUNT_ID'),
+        },
+      },
+      currency: input.currency,
+      constraints: {
+        valid_from: input.validFrom.toISOString(),
+        valid_to: input.validTo.toISOString(),
+        maximum_individual_amount: this.minorAmount(input.maximumIndividualAmount),
+        periodic_limits: {
+          day: {
+            maximum_amount: this.minorAmount(input.dailyLimit),
+            period_alignment: 'calendar',
+          },
+        },
+      },
+      metadata: {
+        local_user_id: input.userId,
+      },
+    };
+  }
+
+  private createMandatePaymentBody(input: CreateProviderMandatePaymentInput): JsonRecord {
+    return {
+      amount_in_minor: this.minorAmount(input.amount),
+      currency: input.currency,
+      reference: `Gamba-${input.idempotencyKey.slice(0, 8)}`,
+      payment_method: {
+        type: 'mandate',
+        mandate_id: input.providerMandateId,
+      },
+      metadata: {
+        local_user_id: input.userId,
+        local_payment_id: input.localPaymentId,
+        source_transaction_id: input.sourceTransactionId ?? '',
+      },
+    };
+  }
+
+  private async resolvePayoutTarget(input: CreateProviderPayoutInput): Promise<PayoutTarget | undefined> {
+    const preferredUserId = input.providerUserId ?? input.userId;
+    if (input.paymentSourceId) {
+      return {
+        type: 'payment_source',
+        userId: preferredUserId,
+        paymentSourceId: input.paymentSourceId,
+      };
+    }
+
+    const paymentSourceTarget = await this.lookupPayoutTargetFromMerchantAccount(input);
+    if (paymentSourceTarget) return paymentSourceTarget;
+
+    if (input.externalBeneficiary) {
+      return {
+        type: 'external_account',
+        beneficiary: input.externalBeneficiary,
+      };
+    }
+
+    return undefined;
+  }
+
+  private async lookupPayoutTargetFromMerchantAccount(
+    input: CreateProviderPayoutInput,
+  ): Promise<PayoutTarget | undefined> {
+    const candidateUserIds = Array.from(
+      new Set([input.providerUserId, input.userId].filter((userId): userId is string => Boolean(userId))),
+    );
+
+    for (const candidateUserId of candidateUserIds) {
+      let paymentSourceId: string | undefined;
+      try {
+        paymentSourceId = await this.lookupPaymentSourceId(candidateUserId);
+      } catch {
+        paymentSourceId = undefined;
+      }
+      if (paymentSourceId) {
+        return {
+          type: 'payment_source',
+          userId: candidateUserId,
+          paymentSourceId,
+        };
+      }
+    }
+
+    return undefined;
+  }
+
+  private async lookupPaymentSourceId(userId: string): Promise<string | undefined> {
+    const merchantAccountId = this.requiredConfig('TRUELAYER_MERCHANT_ACCOUNT_ID');
+    const path = `/v3/merchant-accounts/${encodeURIComponent(
+      merchantAccountId,
+    )}/payment-sources?${new URLSearchParams({ user_id: userId }).toString()}`;
+    const response = await this.signedRequestJson<PaymentSourcesResponse>(path, {
+      method: HttpMethod.Get,
+      idempotencyKey: randomUUID(),
+    });
+
+    return response.items?.find((source) => typeof source.id === 'string')?.id;
+  }
+
+  private createPayoutBody(input: CreateProviderPayoutInput, payoutTarget: PayoutTarget): JsonRecord {
     return {
       merchant_account_id: this.requiredConfig('TRUELAYER_MERCHANT_ACCOUNT_ID'),
       amount_in_minor: this.minorAmount(input.amount),
       currency: input.currency,
-      beneficiary: {
-        type: 'payment_source',
-        user_id: input.userId,
-        payment_source_id: input.paymentSourceId,
-        reference: `Gamba-${input.idempotencyKey.slice(0, 8)}`,
-      },
+      beneficiary:
+        payoutTarget.type === 'payment_source'
+          ? this.closedLoopPayoutBeneficiary(input, payoutTarget)
+          : this.externalPayoutBeneficiary(input, payoutTarget.beneficiary),
       scheme_selection: {
         type: 'instant_preferred',
       },
       metadata: {
         local_user_id: input.userId,
       },
+    };
+  }
+
+  private closedLoopPayoutBeneficiary(
+    input: CreateProviderPayoutInput,
+    payoutTarget: Extract<PayoutTarget, { type: 'payment_source' }>,
+  ): JsonRecord {
+    return {
+      type: 'payment_source',
+      user_id: payoutTarget.userId,
+      payment_source_id: payoutTarget.paymentSourceId,
+      reference: `Gamba-${input.idempotencyKey.slice(0, 8)}`,
+    };
+  }
+
+  private externalPayoutBeneficiary(
+    input: CreateProviderPayoutInput,
+    beneficiary: ProviderExternalPayoutBeneficiary,
+  ): JsonRecord {
+    return {
+      type: 'external_account',
+      account_holder_name: beneficiary.accountHolderName,
+      account_identifier: beneficiary.accountIdentifier,
+      reference: `Gamba-${input.idempotencyKey.slice(0, 8)}`,
+      address: {
+        address_line1: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_ADDRESS_LINE1', '40 Finsbury Square'),
+        state: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_STATE', 'London'),
+        city: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_CITY', 'London'),
+        country_code: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_COUNTRY_CODE', 'GB'),
+        zip: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_ZIP', 'EC2A 1AE'),
+      },
+      date_of_birth: this.config.get<string>('TRUELAYER_SANDBOX_PAYOUT_DATE_OF_BIRTH', '1990-01-31'),
     };
   }
 
@@ -498,6 +748,20 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     return url.toString();
   }
 
+  private hostedMandateUri(providerMandateId: string, resourceToken: string): string {
+    const configuredBase = this.config.get<string>(
+      'TRUELAYER_MANDATE_HPP_BASE_URL',
+      'https://payment.truelayer-sandbox.com/mandates',
+    );
+    const baseUrl = configuredBase.split('#')[0].split('?')[0].replace(/\/+$/, '');
+    const params = new URLSearchParams({
+      mandate_id: providerMandateId,
+      resource_token: resourceToken,
+      return_uri: this.mandateReturnUri(),
+    });
+    return `${baseUrl}#${params.toString()}`;
+  }
+
   private paymentReturnUri(): string {
     return this.config.get<string>(
       'TRUELAYER_PAYMENT_RETURN_URI',
@@ -505,13 +769,32 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     );
   }
 
+  private mandateReturnUri(): string {
+    return this.config.get<string>(
+      'TRUELAYER_MANDATE_RETURN_URI',
+      'http://localhost:3000/api/banking/truelayer/mandate-callback',
+    );
+  }
+
+  private mandateTokenScope(): string {
+    return this.config.get<string>('TRUELAYER_MANDATE_TOKEN_SCOPE', 'payments recurring_payments:sweeping');
+  }
+
   private mapPaymentStatus(status: string | undefined): BankingPaymentStatus {
     if (status === 'failed') return BankingPaymentStatus.FAILED;
-    if (status === 'settled' || status === 'executed') return BankingPaymentStatus.SUCCEEDED;
-    if (status === 'authorized' && this.config.get<string>('TRUELAYER_CREDIT_DEPOSITS_ON') === 'authorized') {
-      return BankingPaymentStatus.SUCCEEDED;
-    }
+    if (status === 'settled') return BankingPaymentStatus.SUCCEEDED;
     return BankingPaymentStatus.PENDING;
+  }
+
+  private mapMandateStatus(status: string | undefined): BankingMandateStatus {
+    if (status === 'authorized') return BankingMandateStatus.AUTHORIZED;
+    if (status === 'authorizing') return BankingMandateStatus.AUTHORIZING;
+    if (status === 'revoked') return BankingMandateStatus.REVOKED;
+    if (status === 'authorization_required' || status === 'authorisation_required') {
+      return BankingMandateStatus.AUTHORIZATION_REQUIRED;
+    }
+    if (status === 'failed' || status === 'rejected' || status === 'cancelled') return BankingMandateStatus.FAILED;
+    return BankingMandateStatus.AUTHORIZATION_REQUIRED;
   }
 
   private mapPayoutStatus(status: string | undefined): BankingPaymentStatus {
@@ -597,13 +880,25 @@ export class SandboxTrueLayerProvider implements TrueLayerProvider {
     return [
       {
         providerAccountId: `${providerConnectionId}-current-gbp`,
-        displayName: 'TrueLayer Sandbox Mock Current Account',
+        displayName: 'JOHN SANDBRIDGE',
         accountType: 'transaction',
         currency: 'GBP',
         currentBalance: 124_350n,
         raw: {
           provider: 'truelayer',
           mode: 'sandbox-local-data-fallback',
+          account_holder_names: ['JOHN SANDBRIDGE'],
+          account_identifiers: [
+            {
+              type: 'sort_code_account_number',
+              sort_code: '040668',
+              account_number: '00000871',
+            },
+            {
+              type: 'iban',
+              iban: 'GB75CLRB04066800000871',
+            },
+          ],
         },
       },
     ];

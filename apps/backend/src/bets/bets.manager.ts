@@ -129,7 +129,7 @@ export class BetsManager {
     const digest = createHmac('sha256', serverSeed)
       .update(`${clientSeed ?? ''}:${nonce.toString()}`)
       .digest();
-    const headsOdds = 30;
+    const headsOdds = 50;
     const value = digest.readUInt32BE(0);
     const bucket = value % 100;
 

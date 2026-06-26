@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   BankingConnectionStatus,
+  BankingMandateStatus,
   BankingPaymentStatus,
   BankingProvider,
   Prisma,
@@ -16,9 +17,13 @@ import { randomUUID } from 'crypto';
 import { AuditManager } from '../audit/audit.manager';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBankingDepositDto } from './dto/create-banking-deposit.dto';
+import { CreateBankingMandateDto } from './dto/create-banking-mandate.dto';
 import { CreateBankingPayoutDto } from './dto/create-banking-payout.dto';
+import { CreateMandateDepositDto } from './dto/create-mandate-deposit.dto';
 import {
+  ProviderExternalPayoutBeneficiary,
   ProviderDepositResult,
+  ProviderMandateResult,
   ProviderPayoutResult,
   TRUE_LAYER_PROVIDER,
   TrueLayerProvider,
@@ -26,6 +31,8 @@ import {
 
 const BANKING_PROVIDER = BankingProvider.TRUE_LAYER;
 const BANKING_CURRENCY = 'GBP';
+const PROVIDER_PAYMENT_POLL_ATTEMPTS = 8;
+const PROVIDER_PAYMENT_POLL_DELAY_MS = 1_000;
 
 @Injectable()
 export class BankingManager {
@@ -160,6 +167,7 @@ export class BankingManager {
             accountType: account.accountType,
             currency: account.currency,
             currentBalance,
+            raw: this.json(account.raw),
           },
           create: {
             connectionId: connection.id,
@@ -168,6 +176,7 @@ export class BankingManager {
             accountType: account.accountType,
             currency: account.currency,
             currentBalance,
+            raw: this.json(account.raw),
           },
         });
 
@@ -225,7 +234,7 @@ export class BankingManager {
   }
 
   async overview(userId: string) {
-    const [connections, accounts, transactions, payments, payouts] = await Promise.all([
+    const [connections, accounts, transactions, payments, payouts, mandates] = await Promise.all([
       this.prisma.bankConnection.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
@@ -248,6 +257,11 @@ export class BankingManager {
         where: { userId },
         orderBy: { createdAt: 'desc' },
         take: 20,
+      }),
+      this.prisma.bankingMandate.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
       }),
     ]);
 
@@ -278,6 +292,7 @@ export class BankingManager {
         currency: payment.currency,
         status: payment.status.toLowerCase(),
         providerPaymentId: payment.providerPaymentId,
+        mandateId: payment.mandateId,
         sourceTransactionId: payment.sourceTransactionId,
         createdAt: payment.createdAt,
         settledAt: payment.settledAt,
@@ -291,7 +306,191 @@ export class BankingManager {
         createdAt: payout.createdAt,
         settledAt: payout.settledAt,
       })),
+      mandates: mandates.map((mandate) => this.formatMandate(mandate)),
     };
+  }
+
+  async createMandate(userId: string, dto: CreateBankingMandateDto) {
+    const maximumIndividualAmount = BigInt(dto.maximumIndividualAmount);
+    const dailyLimit = BigInt(dto.dailyLimit);
+    if (maximumIndividualAmount <= 0n) throw new BadRequestException('Maximum individual amount must be positive');
+    if (dailyLimit <= 0n) throw new BadRequestException('Daily limit must be positive');
+    if (dailyLimit < maximumIndividualAmount) {
+      throw new BadRequestException('Daily limit must be at least the maximum individual amount');
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { id: true, email: true, username: true },
+    });
+    const idempotencyKey = randomUUID();
+    const validFrom = new Date();
+    const validTo = new Date(validFrom);
+    validTo.setUTCDate(validTo.getUTCDate() + (dto.validDays ?? 365));
+
+    const pending = await this.prisma.bankingMandate.create({
+      data: {
+        userId,
+        provider: BANKING_PROVIDER,
+        providerMandateId: `pending-${idempotencyKey}`,
+        mandateType: 'sweeping',
+        currency: BANKING_CURRENCY,
+        maximumIndividualAmount,
+        dailyLimit,
+        validFrom,
+        validTo,
+        status: BankingMandateStatus.AUTHORIZATION_REQUIRED,
+        idempotencyKey,
+        raw: this.json({ provider: BANKING_PROVIDER, mode: this.provider.mode, status: 'created_locally' }),
+      },
+    });
+
+    await this.audit.create({
+      userId,
+      action: 'BANKING_MANDATE_CREATED',
+      entityType: 'BANKING_MANDATE',
+      entityId: pending.id,
+      metadata: {
+        provider: BANKING_PROVIDER,
+        maximumIndividualAmount: maximumIndividualAmount.toString(),
+        dailyLimit: dailyLimit.toString(),
+        validTo: validTo.toISOString(),
+      },
+    });
+
+    let providerMandate: ProviderMandateResult;
+    try {
+      providerMandate = await this.provider.createMandate({
+        userId,
+        email: user.email,
+        username: user.username,
+        currency: BANKING_CURRENCY,
+        maximumIndividualAmount,
+        dailyLimit,
+        validFrom,
+        validTo,
+        idempotencyKey,
+      });
+    } catch (error) {
+      const failed = await this.prisma.bankingMandate.update({
+        where: { id: pending.id },
+        data: {
+          status: BankingMandateStatus.FAILED,
+          raw: this.json({
+            provider: BANKING_PROVIDER,
+            mode: this.provider.mode,
+            error: error instanceof Error ? error.message : 'Unknown provider error',
+          }),
+        },
+      });
+      await this.audit.create({
+        userId,
+        action: 'BANKING_MANDATE_FAILED',
+        entityType: 'BANKING_MANDATE',
+        entityId: failed.id,
+        metadata: { provider: BANKING_PROVIDER },
+      });
+      throw error;
+    }
+
+    const saved = await this.applyProviderMandateResult(userId, pending.id, providerMandate);
+    return { mandate: saved, authorizationUri: saved.authorizationUri };
+  }
+
+  async completeTrueLayerMandateCallback(input: { error?: string; providerMandateId?: string }) {
+    const mandate = await this.findMandateForProviderCallback(input.providerMandateId);
+    if (!mandate) throw new NotFoundException('Pending TrueLayer mandate was not found');
+
+    return this.completeStoredTrueLayerMandate(mandate, input.error);
+  }
+
+  async createMandateDeposit(userId: string, dto: CreateMandateDepositDto) {
+    const amount = BigInt(dto.amount);
+    if (amount <= 0n) throw new BadRequestException('Deposit amount must be positive');
+
+    if (dto.sourceTransactionId) {
+      const sourceTransaction = await this.findSourceTransactionForUser(userId, dto.sourceTransactionId);
+      if (!sourceTransaction) throw new BadRequestException('Source bank transaction was not found for this user');
+    }
+
+    const prepared = await this.withSerializationRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          const mandate = await this.lockAuthorizedMandate(tx, userId, dto.mandateId);
+          this.validateMandatePayment(mandate, amount);
+
+          const usedToday = await this.mandateAmountUsedToday(tx, mandate.id);
+          if (usedToday + amount > mandate.dailyLimit) {
+            throw new UnprocessableEntityException('This deposit would exceed the mandate daily limit');
+          }
+
+          const wallet = await this.lockWallet(tx, userId);
+          const idempotencyKey = randomUUID();
+          const payment = await tx.bankingPayment.create({
+            data: {
+              userId,
+              walletId: wallet.id,
+              mandateId: mandate.id,
+              sourceTransactionId: dto.sourceTransactionId,
+              provider: BANKING_PROVIDER,
+              providerPaymentId: `pending-${idempotencyKey}`,
+              amount,
+              currency: BANKING_CURRENCY,
+              status: BankingPaymentStatus.PENDING,
+              idempotencyKey,
+              raw: this.json({
+                provider: BANKING_PROVIDER,
+                mode: this.provider.mode,
+                mandateId: mandate.id,
+                status: 'created_locally',
+              }),
+            },
+          });
+
+          await this.audit.create(
+            {
+              userId,
+              action: 'BANKING_MANDATE_DEPOSIT_CREATED',
+              entityType: 'BANKING_PAYMENT',
+              entityId: payment.id,
+              metadata: {
+                provider: BANKING_PROVIDER,
+                mandateId: mandate.id,
+                amount: amount.toString(),
+                status: payment.status,
+              },
+            },
+            tx,
+          );
+
+          return {
+            mandateProviderId: mandate.providerMandateId,
+            idempotencyKey,
+            paymentId: payment.id,
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      ),
+    );
+
+    let providerPayment: ProviderDepositResult;
+    try {
+      const createdPayment = await this.provider.createMandatePayment({
+        userId,
+        providerMandateId: prepared.mandateProviderId,
+        amount,
+        currency: BANKING_CURRENCY,
+        idempotencyKey: prepared.idempotencyKey,
+        localPaymentId: prepared.paymentId,
+        sourceTransactionId: dto.sourceTransactionId,
+      });
+      providerPayment = await this.waitForProviderPaymentSettlement(createdPayment);
+    } catch (error) {
+      await this.markDepositFailed(userId, prepared.paymentId, prepared.idempotencyKey, error);
+      throw error;
+    }
+
+    return this.applyProviderDepositResult(userId, prepared.paymentId, providerPayment);
   }
 
   async createDeposit(userId: string, dto: CreateBankingDepositDto) {
@@ -407,6 +606,8 @@ export class BankingManager {
 
     const idempotencyKey = randomUUID();
     const paymentSourceId = await this.latestPaymentSourceIdForUser(userId);
+    const providerUserId = await this.latestProviderUserIdForUser(userId);
+    const externalBeneficiary = await this.latestExternalPayoutBeneficiaryForUser(userId);
     const pending = await this.withSerializationRetry(() =>
       this.prisma.$transaction(
         async (tx) => {
@@ -465,6 +666,8 @@ export class BankingManager {
         currency: BANKING_CURRENCY,
         idempotencyKey,
         paymentSourceId,
+        providerUserId,
+        externalBeneficiary,
       });
     } catch (error) {
       await this.failPayoutAndRefund(userId, pending.payoutId, amount, idempotencyKey);
@@ -515,6 +718,70 @@ export class BankingManager {
       currency: settled.currency,
       newBalance: pending.newBalance.toString(),
     };
+  }
+
+  private async applyProviderMandateResult(
+    userId: string,
+    mandateId: string,
+    providerMandate: ProviderMandateResult,
+  ) {
+    const updated = await this.prisma.bankingMandate.update({
+      where: { id: mandateId },
+      data: {
+        providerMandateId: providerMandate.providerMandateId,
+        providerUserId: providerMandate.providerUserId,
+        status: providerMandate.status,
+        authorizationUri: providerMandate.authorizationUri,
+        raw: this.json(providerMandate.raw),
+        authorizedAt:
+          providerMandate.status === BankingMandateStatus.AUTHORIZED ? new Date() : undefined,
+        revokedAt: providerMandate.status === BankingMandateStatus.REVOKED ? new Date() : undefined,
+      },
+    });
+
+    await this.audit.create({
+      userId,
+      action:
+        updated.status === BankingMandateStatus.AUTHORIZED
+          ? 'BANKING_MANDATE_AUTHORIZED'
+          : updated.status === BankingMandateStatus.FAILED
+            ? 'BANKING_MANDATE_FAILED'
+            : 'BANKING_MANDATE_UPDATED',
+      entityType: 'BANKING_MANDATE',
+      entityId: updated.id,
+      metadata: {
+        provider: BANKING_PROVIDER,
+        status: updated.status,
+        maximumIndividualAmount: updated.maximumIndividualAmount.toString(),
+        dailyLimit: updated.dailyLimit.toString(),
+      },
+    });
+
+    return this.formatMandate(updated);
+  }
+
+  private async completeStoredTrueLayerMandate(
+    mandate: { id: string; userId: string; providerMandateId: string },
+    error?: string,
+  ) {
+    if (error) {
+      return this.applyProviderMandateResult(mandate.userId, mandate.id, {
+        providerMandateId: mandate.providerMandateId,
+        status: BankingMandateStatus.FAILED,
+        raw: {
+          provider: BANKING_PROVIDER,
+          mode: this.provider.mode,
+          callbackError: error,
+        },
+      });
+    }
+
+    if (mandate.providerMandateId.startsWith('pending-')) {
+      throw new BadRequestException('TrueLayer mandate has not been created with the provider yet');
+    }
+
+    const providerMandate = await this.provider.getMandate(mandate.providerMandateId);
+    return this.applyProviderMandateResult(mandate.userId, mandate.id, providerMandate);
   }
 
   private async applyProviderDepositResult(
@@ -612,6 +879,16 @@ export class BankingManager {
     });
   }
 
+  private async waitForProviderPaymentSettlement(providerPayment: ProviderDepositResult) {
+    let latest = providerPayment;
+    for (let attempt = 0; attempt < PROVIDER_PAYMENT_POLL_ATTEMPTS; attempt += 1) {
+      if (latest.status !== BankingPaymentStatus.PENDING) return latest;
+      await this.sleep(PROVIDER_PAYMENT_POLL_DELAY_MS);
+      latest = await this.provider.getDeposit(providerPayment.providerPaymentId);
+    }
+    return latest;
+  }
+
   private formatConnection(connection: {
     id: string;
     provider: BankingProvider;
@@ -627,6 +904,36 @@ export class BankingManager {
       status: connection.status.toLowerCase(),
       consentExpiresAt: connection.consentExpiresAt,
       authorizationUri,
+    };
+  }
+
+  private formatMandate(mandate: {
+    id: string;
+    provider: BankingProvider;
+    providerMandateId: string;
+    status: BankingMandateStatus;
+    currency: string;
+    maximumIndividualAmount: bigint;
+    dailyLimit: bigint;
+    validFrom: Date;
+    validTo: Date;
+    authorizationUri: string | null;
+    authorizedAt: Date | null;
+    revokedAt: Date | null;
+  }) {
+    return {
+      id: mandate.id,
+      provider: mandate.provider.toLowerCase(),
+      providerMandateId: mandate.providerMandateId,
+      status: mandate.status.toLowerCase(),
+      currency: mandate.currency,
+      maximumIndividualAmount: mandate.maximumIndividualAmount.toString(),
+      dailyLimit: mandate.dailyLimit.toString(),
+      validFrom: mandate.validFrom,
+      validTo: mandate.validTo,
+      authorizationUri: mandate.authorizationUri ?? undefined,
+      authorizedAt: mandate.authorizedAt,
+      revokedAt: mandate.revokedAt,
     };
   }
 
@@ -683,6 +990,17 @@ export class BankingManager {
     });
   }
 
+  private findMandateForProviderCallback(providerMandateId?: string) {
+    if (!providerMandateId) return null;
+
+    return this.prisma.bankingMandate.findFirst({
+      where: {
+        provider: BANKING_PROVIDER,
+        providerMandateId,
+      },
+    });
+  }
+
   private async latestPaymentSourceIdForUser(userId: string): Promise<string | undefined> {
     const payment = await this.prisma.bankingPayment.findFirst({
       where: {
@@ -695,6 +1013,80 @@ export class BankingManager {
       select: { paymentSourceId: true },
     });
     return payment?.paymentSourceId ?? undefined;
+  }
+
+  private async latestProviderUserIdForUser(userId: string): Promise<string | undefined> {
+    const mandate = await this.prisma.bankingMandate.findFirst({
+      where: {
+        userId,
+        provider: BANKING_PROVIDER,
+        providerUserId: { not: null },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { providerUserId: true },
+    });
+    return mandate?.providerUserId ?? undefined;
+  }
+
+  private async latestExternalPayoutBeneficiaryForUser(
+    userId: string,
+  ): Promise<ProviderExternalPayoutBeneficiary | undefined> {
+    const account = await this.prisma.externalBankAccount.findFirst({
+      where: {
+        connection: { userId },
+        currency: BANKING_CURRENCY,
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        displayName: true,
+        raw: true,
+      },
+    });
+    if (!account) return undefined;
+
+    const raw = this.metadataRecord(account.raw);
+    const holderNames = Array.isArray(raw.account_holder_names) ? raw.account_holder_names : [];
+    const accountHolderName =
+      holderNames.find((name): name is string => typeof name === 'string' && name.trim().length > 0) ??
+      account.displayName;
+    const identifiers = Array.isArray(raw.account_identifiers) ? raw.account_identifiers : [];
+    const accountIdentifier = this.preferredAccountIdentifier(identifiers);
+    if (!accountIdentifier) return undefined;
+
+    return {
+      accountHolderName,
+      accountIdentifier,
+    };
+  }
+
+  private preferredAccountIdentifier(identifiers: unknown[]): Record<string, string> | undefined {
+    const records = identifiers.filter(
+      (identifier): identifier is Record<string, unknown> =>
+        Boolean(identifier) && typeof identifier === 'object' && !Array.isArray(identifier),
+    );
+    const scan = records.find(
+      (identifier) =>
+        identifier.type === 'sort_code_account_number' &&
+        typeof identifier.sort_code === 'string' &&
+        typeof identifier.account_number === 'string',
+    );
+    if (scan) {
+      return {
+        type: 'sort_code_account_number',
+        sort_code: String(scan.sort_code),
+        account_number: String(scan.account_number),
+      };
+    }
+
+    const iban = records.find((identifier) => identifier.type === 'iban' && typeof identifier.iban === 'string');
+    if (iban) {
+      return {
+        type: 'iban',
+        iban: String(iban.iban),
+      };
+    }
+
+    return undefined;
   }
 
   private async adjustCachedBankAccountBalance(
@@ -772,6 +1164,75 @@ export class BankingManager {
     }
 
     return null;
+  }
+
+  private async lockAuthorizedMandate(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    mandateId?: string,
+  ) {
+    const now = new Date();
+    const locked = mandateId
+      ? await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT "id" FROM "BankingMandate"
+          WHERE "id" = ${mandateId}::uuid
+            AND "userId" = ${userId}::uuid
+            AND "provider" = ${BANKING_PROVIDER}::"BankingProvider"
+          FOR UPDATE
+        `)
+      : await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT "id" FROM "BankingMandate"
+          WHERE "userId" = ${userId}::uuid
+            AND "provider" = ${BANKING_PROVIDER}::"BankingProvider"
+            AND "status" = ${BankingMandateStatus.AUTHORIZED}::"BankingMandateStatus"
+            AND "validFrom" <= ${now}
+            AND "validTo" > ${now}
+          ORDER BY "createdAt" DESC
+          LIMIT 1
+          FOR UPDATE
+        `);
+    if (!locked[0]) throw new NotFoundException('No authorised Open Banking mandate was found');
+
+    return tx.bankingMandate.findUniqueOrThrow({ where: { id: locked[0].id } });
+  }
+
+  private validateMandatePayment(
+    mandate: {
+      status: BankingMandateStatus;
+      validFrom: Date;
+      validTo: Date;
+      maximumIndividualAmount: bigint;
+    },
+    amount: bigint,
+  ) {
+    const now = new Date();
+    if (mandate.status !== BankingMandateStatus.AUTHORIZED) {
+      throw new BadRequestException('Open Banking mandate is not authorised');
+    }
+    if (mandate.validFrom > now || mandate.validTo <= now) {
+      throw new BadRequestException('Open Banking mandate is outside its valid date range');
+    }
+    if (amount > mandate.maximumIndividualAmount) {
+      throw new UnprocessableEntityException('This deposit exceeds the mandate individual payment limit');
+    }
+  }
+
+  private async mandateAmountUsedToday(
+    tx: Prisma.TransactionClient,
+    mandateId: string,
+  ): Promise<bigint> {
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+    const used = await tx.bankingPayment.aggregate({
+      where: {
+        mandateId,
+        status: { not: BankingPaymentStatus.FAILED },
+        createdAt: { gte: startOfToday },
+      },
+      _sum: { amount: true },
+    });
+
+    return used._sum.amount ?? 0n;
   }
 
   private async completeStoredTrueLayerPayment(
@@ -894,5 +1355,9 @@ export class BankingManager {
       }
     }
     throw new Error('Unreachable transaction retry state');
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

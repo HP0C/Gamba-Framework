@@ -610,3 +610,126 @@ Common errors:
 - `400` if validation fails.
 - `401` if not logged in.
 - `422` if the wallet balance is insufficient.
+
+### VRP / Reusable Open Banking Deposit Endpoints
+
+These endpoints add a sandbox VRP-style flow where the user authorises deposit limits once, then later deposits can be attempted against that mandate instead of sending the user through a hosted payment confirmation each time.
+
+For local development, add these backend env vars:
+
+```env
+TRUELAYER_MANDATE_PROVIDER_ID=ob-natwest-vrp-sandbox
+TRUELAYER_MANDATE_TYPE=sweeping
+TRUELAYER_MANDATE_TOKEN_SCOPE=payments recurring_payments:sweeping
+TRUELAYER_MANDATE_RETURN_URI=http://localhost:3000/api/banking/truelayer/mandate-callback
+TRUELAYER_MANDATE_HPP_BASE_URL=https://payment.truelayer-sandbox.com/mandates
+```
+
+On Render/Vercel, `TRUELAYER_MANDATE_RETURN_URI` should point at the public backend callback, for example:
+
+```env
+TRUELAYER_MANDATE_RETURN_URI=https://gamba-framework.onrender.com/api/banking/truelayer/mandate-callback
+```
+
+#### `POST /api/banking/mandates`
+
+Requires login. Creates a reusable Open Banking payment mandate with app-side limits.
+
+Request body:
+
+```json
+{
+  "maximumIndividualAmount": 1000,
+  "dailyLimit": 5000,
+  "validDays": 365
+}
+```
+
+Rules:
+
+- Amounts are integer minor units, so `1000` means GBP 10.00.
+- `maximumIndividualAmount` must be positive.
+- `dailyLimit` must be positive and at least as large as `maximumIndividualAmount`.
+- `validDays` is optional and can be 1-365.
+
+Response:
+
+```json
+{
+  "mandate": {
+    "id": "uuid",
+    "provider": "true_layer",
+    "providerMandateId": "truelayer-mandate-id",
+    "status": "authorization_required",
+    "currency": "GBP",
+    "maximumIndividualAmount": "1000",
+    "dailyLimit": "5000",
+    "validFrom": "2026-06-25T12:00:00.000Z",
+    "validTo": "2027-06-25T12:00:00.000Z",
+    "authorizationUri": "https://payment.truelayer-sandbox.com/mandates#...",
+    "authorizedAt": null,
+    "revokedAt": null
+  },
+  "authorizationUri": "https://payment.truelayer-sandbox.com/mandates#..."
+}
+```
+
+The frontend should redirect the browser to `authorizationUri` when it is present.
+
+#### `GET /api/banking/truelayer/mandate-callback`
+
+TrueLayer redirects here after the hosted mandate authorisation flow.
+
+Query parameters may include:
+
+- `mandate_id`
+- `mandateId`
+- `error`
+
+Response:
+
+- Redirects to `FRONTEND_URL?mandate=authorized`, `authorizing`, `authorization_required`, `failed`, or `error`.
+
+This route is normally called by TrueLayer, not manually by the frontend.
+
+#### `POST /api/banking/mandate-deposits`
+
+Requires login. Creates a deposit using an already-authorised mandate.
+
+Request body:
+
+```json
+{
+  "amount": 1000,
+  "mandateId": "optional-mandate-uuid",
+  "sourceTransactionId": "optional-transaction-uuid"
+}
+```
+
+Rules:
+
+- `amount` must be a positive integer in pence.
+- The mandate must be authorised and inside its valid date range.
+- The deposit cannot exceed the mandate's `maximumIndividualAmount`.
+- The sum of non-failed mandate deposits created today cannot exceed the mandate's `dailyLimit`.
+- If `mandateId` is omitted, the backend uses the latest authorised mandate for the user.
+
+Response:
+
+```json
+{
+  "id": "uuid",
+  "status": "succeeded",
+  "amount": "1000",
+  "currency": "GBP",
+  "newBalance": "1000"
+}
+```
+
+In Prisma Studio:
+
+- `BankingMandate` is the reusable Open Banking permission/mandate.
+- `maximumIndividualAmount` is the biggest single deposit allowed through that mandate.
+- `dailyLimit` is the maximum total amount the app should attempt through that mandate per UTC day.
+- `status` shows where the mandate is in the authorisation lifecycle.
+- `BankingPayment.mandateId` links a deposit back to the mandate that created it.

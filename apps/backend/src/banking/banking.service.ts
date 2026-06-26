@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { BankingManager } from './banking.manager';
 import { CreateBankingDepositDto } from './dto/create-banking-deposit.dto';
+import { CreateBankingMandateDto } from './dto/create-banking-mandate.dto';
 import { CreateBankingPayoutDto } from './dto/create-banking-payout.dto';
+import { CreateMandateDepositDto } from './dto/create-mandate-deposit.dto';
 
 @Injectable()
 export class BankingService {
@@ -29,6 +31,18 @@ export class BankingService {
 
   createDeposit(userId: string, dto: CreateBankingDepositDto) {
     return this.manager.createDeposit(userId, dto);
+  }
+
+  createMandate(userId: string, dto: CreateBankingMandateDto) {
+    return this.manager.createMandate(userId, dto);
+  }
+
+  completeTrueLayerMandateCallback(input: { error?: string; providerMandateId?: string }) {
+    return this.manager.completeTrueLayerMandateCallback(input);
+  }
+
+  createMandateDeposit(userId: string, dto: CreateMandateDepositDto) {
+    return this.manager.createMandateDeposit(userId, dto);
   }
 
   completeTrueLayerPayment(userId: string, input: { error?: string; paymentId?: string; providerPaymentId?: string }) {

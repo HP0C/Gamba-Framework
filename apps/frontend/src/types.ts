@@ -43,6 +43,7 @@ export interface BankingPayment {
   currency: string;
   status: string;
   providerPaymentId: string;
+  mandateId: string | null;
   sourceTransactionId: string | null;
   createdAt: string;
   settledAt: string | null;
@@ -58,6 +59,21 @@ export interface BankingPayout {
   settledAt: string | null;
 }
 
+export interface BankingMandate {
+  id: string;
+  provider: string;
+  providerMandateId: string;
+  status: string;
+  currency: string;
+  maximumIndividualAmount: string;
+  dailyLimit: string;
+  validFrom: string;
+  validTo: string;
+  authorizationUri?: string;
+  authorizedAt: string | null;
+  revokedAt: string | null;
+}
+
 export interface BankingOverview {
   mode: string;
   connections: BankConnection[];
@@ -65,6 +81,7 @@ export interface BankingOverview {
   transactions: BankTransaction[];
   payments: BankingPayment[];
   payouts: BankingPayout[];
+  mandates: BankingMandate[];
 }
 
 export interface BankingConnectResult {
@@ -79,6 +96,11 @@ export interface BankingMoneyMovementResult {
   amount: string;
   currency: string;
   newBalance?: string;
+  authorizationUri?: string;
+}
+
+export interface BankingMandateResult {
+  mandate: BankingMandate;
   authorizationUri?: string;
 }
 

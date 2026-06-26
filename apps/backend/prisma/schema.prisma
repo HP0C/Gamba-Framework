@@ -52,6 +52,14 @@ enum BankingPaymentStatus {
   FAILED
 }
 
+enum BankingMandateStatus {
+  AUTHORIZATION_REQUIRED
+  AUTHORIZING
+  AUTHORIZED
+  REVOKED
+  FAILED
+}
+
 enum ExternalTransactionDirection {
   INBOUND
   OUTBOUND
@@ -89,6 +97,7 @@ model User {
   bankConnections        BankConnection[]
   bankingPayments        BankingPayment[]
   bankingPayouts         BankingPayout[]
+  bankingMandates        BankingMandate[]
 }
 
 model Account {
@@ -175,6 +184,7 @@ model ExternalBankAccount {
   accountType       String
   currency          String                    @default("GBP") @db.VarChar(3)
   currentBalance    BigInt                    @default(0)
+  raw               Json?
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @updatedAt
   connection        BankConnection            @relation(fields: [connectionId], references: [id], onDelete: Cascade)
@@ -210,6 +220,7 @@ model BankingPayment {
   userId              String                   @db.Uuid
   walletId            String                   @db.Uuid
   sourceTransactionId String?                  @db.Uuid
+  mandateId           String?                  @db.Uuid
   provider            BankingProvider
   providerPaymentId   String
   paymentSourceId     String?
@@ -224,9 +235,11 @@ model BankingPayment {
   user                User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
   wallet              Wallet                   @relation(fields: [walletId], references: [id], onDelete: Restrict)
   sourceTransaction   ExternalBankTransaction? @relation(fields: [sourceTransactionId], references: [id], onDelete: SetNull)
+  mandate             BankingMandate?          @relation(fields: [mandateId], references: [id], onDelete: SetNull)
 
   @@unique([provider, providerPaymentId])
   @@index([userId, createdAt])
+  @@index([mandateId])
 }
 
 model BankingPayout {
@@ -248,6 +261,33 @@ model BankingPayout {
 
   @@unique([provider, providerPayoutId])
   @@index([userId, createdAt])
+}
+
+model BankingMandate {
+  id                       String               @id @default(uuid()) @db.Uuid
+  userId                   String               @db.Uuid
+  provider                 BankingProvider
+  providerMandateId        String
+  providerUserId           String?
+  mandateType              String               @default("sweeping")
+  currency                 String               @default("GBP") @db.VarChar(3)
+  maximumIndividualAmount  BigInt
+  dailyLimit               BigInt
+  validFrom                DateTime
+  validTo                  DateTime
+  status                   BankingMandateStatus @default(AUTHORIZATION_REQUIRED)
+  authorizationUri         String?
+  idempotencyKey           String               @unique
+  raw                      Json?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  authorizedAt             DateTime?
+  revokedAt                DateTime?
+  user                     User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  payments                 BankingPayment[]
+
+  @@unique([provider, providerMandateId])
+  @@index([userId, status])
 }
 
 model Bet {

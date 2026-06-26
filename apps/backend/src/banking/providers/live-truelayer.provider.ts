@@ -3,11 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import {
   CreateProviderConnectionInput,
   CreateProviderDepositInput,
+  CreateProviderMandateInput,
+  CreateProviderMandatePaymentInput,
   CreateProviderPayoutInput,
   ProviderBankAccount,
   ProviderBankTransaction,
   ProviderConnection,
   ProviderDepositResult,
+  ProviderMandateResult,
   ProviderPayoutResult,
   TrueLayerProvider,
 } from './truelayer-provider.interface';
@@ -34,6 +37,18 @@ export class LiveTrueLayerProvider implements TrueLayerProvider {
   }
 
   async createDeposit(_input: CreateProviderDepositInput): Promise<ProviderDepositResult> {
+    return this.notImplemented();
+  }
+
+  async createMandate(_input: CreateProviderMandateInput): Promise<ProviderMandateResult> {
+    return this.notImplemented();
+  }
+
+  async getMandate(_providerMandateId: string): Promise<ProviderMandateResult> {
+    return this.notImplemented();
+  }
+
+  async createMandatePayment(_input: CreateProviderMandatePaymentInput): Promise<ProviderDepositResult> {
     return this.notImplemented();
   }
 
