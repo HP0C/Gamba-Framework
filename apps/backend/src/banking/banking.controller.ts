@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
 import { AuthenticatedUser } from '../auth/auth.types';
@@ -23,8 +23,8 @@ export class BankingController {
 
   @UseGuards(JwtAuthGuard)
   @Post('connect')
-  connectBank(@RequestUser() user: AuthenticatedUser) {
-    return this.banking.connectBank(user.userId);
+  connectBank(@RequestUser() user: AuthenticatedUser, @Headers('x-app-return-url') appReturnUrl?: string) {
+    return this.banking.connectBank(user.userId, this.validAppReturnUrl(appReturnUrl));
   }
 
   @Get('truelayer/callback')
@@ -34,7 +34,8 @@ export class BankingController {
     @Query('connectionId') camelConnectionId: string | undefined,
     @Res() res: Response,
   ) {
-    const redirect = new URL(this.config.getOrThrow<string>('FRONTEND_URL'));
+    const fallbackUrl = this.config.getOrThrow<string>('FRONTEND_URL').split(',')[0].trim();
+    let redirect = new URL(fallbackUrl);
     const providerConnectionId = snakeConnectionId ?? camelConnectionId;
 
     if (!providerConnectionId) {
@@ -43,10 +44,11 @@ export class BankingController {
     }
 
     try {
-      await this.banking.completeTrueLayerConnectionCallback({
+      const result = await this.banking.completeTrueLayerConnectionCallback({
         error,
         providerConnectionId,
       });
+      if (result.appReturnUrl) redirect = new URL(result.appReturnUrl);
       redirect.searchParams.set('banking', error ? 'error' : 'connected');
     } catch {
       redirect.searchParams.set('banking', 'error');
@@ -62,7 +64,8 @@ export class BankingController {
     @Query('paymentId') camelProviderPaymentId: string | undefined,
     @Res() res: Response,
   ) {
-    const redirect = new URL(this.config.getOrThrow<string>('FRONTEND_URL'));
+    const fallbackUrl = this.config.getOrThrow<string>('FRONTEND_URL').split(',')[0].trim();
+    let redirect = new URL(fallbackUrl);
     const providerPaymentId = snakeProviderPaymentId ?? camelProviderPaymentId;
 
     if (!paymentId && !providerPaymentId) {
@@ -76,6 +79,7 @@ export class BankingController {
         paymentId,
         providerPaymentId,
       });
+      if (result.appReturnUrl) redirect = new URL(result.appReturnUrl);
       redirect.searchParams.set('payment', result.status);
     } catch {
       redirect.searchParams.set('payment', 'error');
@@ -91,8 +95,12 @@ export class BankingController {
 
   @UseGuards(JwtAuthGuard)
   @Post('deposits')
-  createDeposit(@RequestUser() user: AuthenticatedUser, @Body() dto: CreateBankingDepositDto) {
-    return this.banking.createDeposit(user.userId, dto);
+  createDeposit(
+    @RequestUser() user: AuthenticatedUser,
+    @Body() dto: CreateBankingDepositDto,
+    @Headers('x-app-return-url') appReturnUrl?: string,
+  ) {
+    return this.banking.createDeposit(user.userId, dto, this.validAppReturnUrl(appReturnUrl));
   }
 
   @UseGuards(JwtAuthGuard)
@@ -105,5 +113,26 @@ export class BankingController {
   @Post('payouts')
   createPayout(@RequestUser() user: AuthenticatedUser, @Body() dto: CreateBankingPayoutDto) {
     return this.banking.createPayout(user.userId, dto);
+  }
+
+  private validAppReturnUrl(value?: string): string | undefined {
+    if (!value) return undefined;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new BadRequestException('Invalid mobile app return URL');
+    }
+
+    const allowedSchemes = this.config
+      .get<string>('MOBILE_APP_ALLOWED_SCHEMES', 'gamba')
+      .split(',')
+      .map((scheme) => scheme.trim().replace(/:$/, ''))
+      .filter(Boolean);
+    if (!allowedSchemes.includes(parsed.protocol.replace(/:$/, ''))) {
+      throw new BadRequestException('Mobile app return URL scheme is not allowed');
+    }
+    return parsed.toString();
   }
 }

@@ -7,9 +7,13 @@
     "multer": "^2.2.0"
   },
   "scripts": {
-    "build": "npm run build -w @gamba/backend && npm run build -w @gamba/frontend",
+    "build": "npm run build -w @gamba/backend && npm run build -w @gamba/frontend && npm run mobile:typecheck",
     "test": "npm run test -w @gamba/backend",
     "lint": "npm run lint -w @gamba/backend && npm run lint -w @gamba/frontend",
+    "mobile:start": "npm run start -w @gamba/mobile",
+    "mobile:android": "npm run android -w @gamba/mobile",
+    "mobile:ios": "npm run ios -w @gamba/mobile",
+    "mobile:typecheck": "npm run typecheck -w @gamba/mobile",
     "prisma:generate": "npm run prisma:generate -w @gamba/backend",
     "prisma:migrate": "npm run prisma:migrate -w @gamba/backend",
     "prisma:studio": "npm run prisma:studio -w @gamba/backend"

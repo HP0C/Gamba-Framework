@@ -11,8 +11,8 @@ export class BankingService {
     return this.manager.overview(userId);
   }
 
-  connectBank(userId: string) {
-    return this.manager.connectBank(userId);
+  connectBank(userId: string, appReturnUrl?: string) {
+    return this.manager.connectBank(userId, appReturnUrl);
   }
 
   completeTrueLayerConnection(userId: string, input: { error?: string; providerConnectionId?: string }) {
@@ -27,8 +27,8 @@ export class BankingService {
     return this.manager.syncBankData(userId);
   }
 
-  createDeposit(userId: string, dto: CreateBankingDepositDto) {
-    return this.manager.createDeposit(userId, dto);
+  createDeposit(userId: string, dto: CreateBankingDepositDto, appReturnUrl?: string) {
+    return this.manager.createDeposit(userId, dto, appReturnUrl);
   }
 
   completeTrueLayerPayment(userId: string, input: { error?: string; paymentId?: string; providerPaymentId?: string }) {

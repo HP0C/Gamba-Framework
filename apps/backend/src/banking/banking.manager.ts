@@ -35,7 +35,7 @@ export class BankingManager {
     @Inject(TRUE_LAYER_PROVIDER) private readonly provider: TrueLayerProvider,
   ) {}
 
-  async connectBank(userId: string) {
+  async connectBank(userId: string, appReturnUrl?: string) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: { id: true, email: true, username: true },
@@ -45,6 +45,10 @@ export class BankingManager {
       email: user.email,
       username: user.username,
     });
+    const connectionMetadata = {
+      ...providerConnection.metadata,
+      ...(appReturnUrl ? { appReturnUrl } : {}),
+    };
     const connection = await this.prisma.bankConnection.upsert({
       where: {
         provider_providerConnectionId: {
@@ -55,7 +59,7 @@ export class BankingManager {
       update: {
         status: providerConnection.status ?? BankingConnectionStatus.ACTIVE,
         consentExpiresAt: providerConnection.consentExpiresAt,
-        metadata: this.json(providerConnection.metadata),
+        metadata: this.json(connectionMetadata),
       },
       create: {
         userId,
@@ -63,7 +67,7 @@ export class BankingManager {
         providerConnectionId: providerConnection.providerConnectionId,
         status: providerConnection.status ?? BankingConnectionStatus.ACTIVE,
         consentExpiresAt: providerConnection.consentExpiresAt,
-        metadata: this.json(providerConnection.metadata),
+        metadata: this.json(connectionMetadata),
       },
     });
 
@@ -108,7 +112,7 @@ export class BankingManager {
     connection: { id: string; userId: string; metadata: Prisma.JsonValue | null },
     error?: string,
   ) {
-    const metadata = {
+    const metadata: Record<string, unknown> = {
       ...this.metadataRecord(connection.metadata),
       callbackReceivedAt: new Date().toISOString(),
       callbackError: error,
@@ -127,7 +131,10 @@ export class BankingManager {
       metadata: { provider: BANKING_PROVIDER, mode: this.provider.mode, status: updated.status },
     });
 
-    return this.formatConnection(updated);
+    return {
+      ...this.formatConnection(updated),
+      appReturnUrl: typeof metadata.appReturnUrl === 'string' ? metadata.appReturnUrl : undefined,
+    };
   }
 
   async syncBankData(userId: string) {
@@ -294,7 +301,7 @@ export class BankingManager {
     };
   }
 
-  async createDeposit(userId: string, dto: CreateBankingDepositDto) {
+  async createDeposit(userId: string, dto: CreateBankingDepositDto, appReturnUrl?: string) {
     const amount = BigInt(dto.amount);
     if (amount <= 0n) throw new BadRequestException('Deposit amount must be positive');
 
@@ -323,7 +330,12 @@ export class BankingManager {
               currency: BANKING_CURRENCY,
               status: BankingPaymentStatus.PENDING,
               idempotencyKey,
-              raw: this.json({ provider: BANKING_PROVIDER, mode: this.provider.mode, status: 'created_locally' }),
+              raw: this.json({
+                provider: BANKING_PROVIDER,
+                mode: this.provider.mode,
+                status: 'created_locally',
+                ...(appReturnUrl ? { appReturnUrl } : {}),
+              }),
             },
           });
 
@@ -561,7 +573,10 @@ export class BankingManager {
               providerPaymentId: providerPayment.providerPaymentId,
               paymentSourceId: providerPayment.paymentSourceId ?? payment.paymentSourceId,
               status: nextStatus,
-              raw: this.json(providerPayment.raw),
+              raw: this.json({
+                ...this.metadataRecord(payment.raw),
+                providerResult: providerPayment.raw,
+              }),
               settledAt,
             },
           });
@@ -775,11 +790,14 @@ export class BankingManager {
   }
 
   private async completeStoredTrueLayerPayment(
-    payment: { id: string; userId: string; providerPaymentId: string },
+    payment: { id: string; userId: string; providerPaymentId: string; raw: Prisma.JsonValue | null },
     error?: string,
   ) {
+    const paymentMetadata = this.metadataRecord(payment.raw);
+    const appReturnUrl =
+      typeof paymentMetadata.appReturnUrl === 'string' ? paymentMetadata.appReturnUrl : undefined;
     if (error) {
-      return this.applyProviderDepositResult(payment.userId, payment.id, {
+      const result = await this.applyProviderDepositResult(payment.userId, payment.id, {
         providerPaymentId: payment.providerPaymentId,
         status: BankingPaymentStatus.FAILED,
         raw: {
@@ -788,6 +806,7 @@ export class BankingManager {
           callbackError: error,
         },
       });
+      return { ...result, appReturnUrl };
     }
 
     if (payment.providerPaymentId.startsWith('pending-')) {
@@ -795,7 +814,8 @@ export class BankingManager {
     }
 
     const providerPayment = await this.provider.getDeposit(payment.providerPaymentId);
-    return this.applyProviderDepositResult(payment.userId, payment.id, providerPayment);
+    const result = await this.applyProviderDepositResult(payment.userId, payment.id, providerPayment);
+    return { ...result, appReturnUrl };
   }
 
   private async lockBankingPayment(tx: Prisma.TransactionClient, userId: string, paymentId: string) {

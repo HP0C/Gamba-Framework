@@ -5,12 +5,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -
 COPY package.json package-lock.json ./
 COPY apps/backend/package.json apps/backend/package.json
 COPY apps/frontend/package.json apps/frontend/package.json
-RUN npm ci
+COPY apps/mobile/package.json apps/mobile/package.json
+RUN npm ci --workspace @gamba/backend --include-workspace-root
 
 COPY apps/backend apps/backend
 RUN npm run prisma:generate -w @gamba/backend
 RUN npm run build -w @gamba/backend
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev --workspace @gamba/backend --include-workspace-root
 
 FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production

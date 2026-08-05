@@ -5,6 +5,7 @@ import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { AuthenticatedUser, GoogleProfileUser } from './auth.types';
 import { LoginDto } from './dto/login.dto';
+import { MobileRefreshDto } from './dto/mobile-refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { GoogleAuthGuard, GoogleConfiguredGuard } from './google-auth.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -34,6 +35,24 @@ export class AuthController {
     const result = await this.auth.login(dto, this.context(req));
     this.setCookies(res, result.tokens);
     return { user: this.publicUser(result.user) };
+  }
+
+  @Post('mobile/register')
+  async mobileRegister(@Body() dto: RegisterDto, @Req() req: Request) {
+    const result = await this.auth.register(dto, this.context(req));
+    return { user: this.publicUser(result.user), tokens: result.tokens };
+  }
+
+  @Post('mobile/login')
+  async mobileLogin(@Body() dto: LoginDto, @Req() req: Request) {
+    const result = await this.auth.login(dto, this.context(req));
+    return { user: this.publicUser(result.user), tokens: result.tokens };
+  }
+
+  @Post('mobile/refresh')
+  async mobileRefresh(@Body() dto: MobileRefreshDto, @Req() req: Request) {
+    const tokens = await this.auth.refresh(dto.refreshToken, this.context(req));
+    return { tokens };
   }
 
   @Post('refresh')

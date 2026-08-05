@@ -1,5 +1,7 @@
 # Gamba Server Skeleton
 
+The native Expo client is in `apps/mobile`. See [`apps/mobile/README.md`](apps/mobile/README.md) for phone/emulator setup, TrueLayer deep-link configuration, and a complete testing checklist.
+
 A monorepo for an Open Banking betting application prototype. It contains a NestJS API, PostgreSQL/Prisma 6 persistence, a poopy React/Vite client, Docker Compose, and optional Prisma Studio.
 
 ## Structure

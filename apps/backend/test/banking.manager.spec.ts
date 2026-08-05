@@ -16,6 +16,7 @@ describe('banking wallet ledger behaviour', () => {
       amount: 500n,
       currency: 'GBP',
       settledAt: null,
+      raw: { appReturnUrl: 'gamba://banking-return' },
     };
     const createTransaction = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'wallet-id' }]),
@@ -71,12 +72,13 @@ describe('banking wallet ledger behaviour', () => {
         providerPaymentId: 'provider-payment-id',
         paymentSourceId: 'provider-source-id',
         status: BankingPaymentStatus.SUCCEEDED,
+        raw: { trueLayerStatus: 'settled' },
       }),
     };
     const audit = { create: jest.fn() };
     const manager = new BankingManager(prisma, audit as never, provider as never);
 
-    const response = await manager.createDeposit(userId, { amount: 500 });
+    const response = await manager.createDeposit(userId, { amount: 500 }, 'gamba://banking-return');
 
     expect(createTransaction.bankingPayment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -116,6 +118,10 @@ describe('banking wallet ledger behaviour', () => {
         providerPaymentId: 'provider-payment-id',
         paymentSourceId: 'provider-source-id',
         status: BankingPaymentStatus.SUCCEEDED,
+        raw: {
+          appReturnUrl: 'gamba://banking-return',
+          providerResult: { trueLayerStatus: 'settled' },
+        },
       }),
     });
     expect(response).toEqual(expect.objectContaining({ id: 'payment-id', amount: '500', newBalance: '1500' }));
@@ -147,6 +153,9 @@ describe('banking wallet ledger behaviour', () => {
       },
     };
     const prisma = {
+      bankingPayment: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest
         .fn()
         .mockImplementationOnce(async (operation: (tx: typeof reserveTransaction) => unknown) =>

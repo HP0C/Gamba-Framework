@@ -3,7 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/backend/package.json apps/backend/package.json
 COPY apps/frontend/package.json apps/frontend/package.json
-RUN npm ci
+COPY apps/mobile/package.json apps/mobile/package.json
+RUN npm ci --workspace @gamba/frontend --include-workspace-root
 COPY apps/frontend apps/frontend
 ARG VITE_API_URL=http://localhost:3000/api
 ENV VITE_API_URL=$VITE_API_URL
