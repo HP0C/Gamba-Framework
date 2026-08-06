@@ -76,7 +76,8 @@ describe('banking wallet ledger behaviour', () => {
       }),
     };
     const audit = { create: jest.fn() };
-    const manager = new BankingManager(prisma, audit as never, provider as never);
+    const config = { get: jest.fn().mockReturnValue('false') };
+    const manager = new BankingManager(prisma, audit as never, config as never, provider as never);
 
     const response = await manager.createDeposit(userId, { amount: 500 }, 'gamba://banking-return');
 
@@ -127,6 +128,101 @@ describe('banking wallet ledger behaviour', () => {
     expect(response).toEqual(expect.objectContaining({ id: 'payment-id', amount: '500', newBalance: '1500' }));
   });
 
+  it('can settle a testing deposit instantly without calling the TrueLayer payment flow', async () => {
+    const pendingPayment = {
+      id: 'payment-id',
+      userId,
+      walletId: 'wallet-id',
+      providerPaymentId: 'pending-id',
+      paymentSourceId: null,
+      status: BankingPaymentStatus.PENDING,
+      amount: 700n,
+      currency: 'GBP',
+      settledAt: null,
+      raw: { appReturnUrl: 'gamba://banking-return' },
+    };
+    const createTransaction = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'wallet-id' }]),
+      wallet: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'wallet-id', balance: 1_000n }),
+      },
+      bankingPayment: {
+        create: jest.fn().mockResolvedValue(pendingPayment),
+      },
+    };
+    const settleTransaction = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'payment-id' }])
+        .mockResolvedValueOnce([{ id: 'wallet-id' }]),
+      bankingPayment: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue(pendingPayment),
+        update: jest.fn().mockResolvedValue({
+          id: 'payment-id',
+          status: BankingPaymentStatus.SUCCEEDED,
+          amount: 700n,
+          currency: 'GBP',
+        }),
+      },
+      wallet: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'wallet-id', balance: 1_000n }),
+        update: jest.fn(),
+      },
+      walletTransaction: { create: jest.fn() },
+      externalBankAccount: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const prisma = {
+      user: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: userId,
+          email: 'player@example.test',
+          username: 'player',
+        }),
+      },
+      $transaction: jest
+        .fn()
+        .mockImplementationOnce(async (operation: (tx: typeof createTransaction) => unknown) =>
+          operation(createTransaction),
+        )
+        .mockImplementationOnce(async (operation: (tx: typeof settleTransaction) => unknown) =>
+          operation(settleTransaction),
+        ),
+    } as unknown as PrismaService;
+    const provider = {
+      mode: 'sandbox',
+      createDeposit: jest.fn(),
+    };
+    const audit = { create: jest.fn() };
+    const config = { get: jest.fn().mockReturnValue('true') };
+    const manager = new BankingManager(prisma, audit as never, config as never, provider as never);
+
+    const response = await manager.createDeposit(userId, { amount: 700 }, 'gamba://banking-return');
+
+    expect(provider.createDeposit).not.toHaveBeenCalled();
+    expect(settleTransaction.wallet.update).toHaveBeenCalledWith({
+      where: { id: 'wallet-id' },
+      data: { balance: 1_700n },
+    });
+    expect(settleTransaction.bankingPayment.update).toHaveBeenCalledWith({
+      where: { id: 'payment-id' },
+      data: expect.objectContaining({
+        providerPaymentId: expect.stringMatching(/^test-instant-/),
+        paymentSourceId: 'test-payment-source-payment-id',
+        status: BankingPaymentStatus.SUCCEEDED,
+        raw: expect.objectContaining({
+          appReturnUrl: 'gamba://banking-return',
+          providerResult: expect.objectContaining({
+            testingMode: 'instant_deposit_without_payment_authorisation',
+            amount: '700',
+          }),
+        }),
+      }),
+    });
+    expect(response).toEqual(expect.objectContaining({ id: 'payment-id', amount: '700', newBalance: '1700' }));
+  });
+
   it('reserves wallet funds and writes a withdrawal ledger entry before a provider payout is settled', async () => {
     const reserveTransaction = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'wallet-id' }]),
@@ -172,7 +268,8 @@ describe('banking wallet ledger behaviour', () => {
       }),
     };
     const audit = { create: jest.fn() };
-    const manager = new BankingManager(prisma, audit as never, provider as never);
+    const config = { get: jest.fn().mockReturnValue('false') };
+    const manager = new BankingManager(prisma, audit as never, config as never, provider as never);
 
     const response = await manager.createPayout(userId, { amount: 400 });
 
@@ -193,5 +290,70 @@ describe('banking wallet ledger behaviour', () => {
       data: expect.objectContaining({ providerPayoutId: 'provider-payout-id', status: BankingPaymentStatus.SUCCEEDED }),
     });
     expect(response).toEqual(expect.objectContaining({ id: 'payout-id', amount: '400', newBalance: '600' }));
+  });
+
+  it('can settle a testing payout instantly without calling the TrueLayer payout flow', async () => {
+    const reserveTransaction = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'wallet-id' }]),
+      wallet: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'wallet-id', balance: 1_000n }),
+        update: jest.fn(),
+      },
+      bankingPayout: {
+        create: jest.fn().mockResolvedValue({ id: 'payout-id' }),
+      },
+      walletTransaction: { create: jest.fn() },
+    };
+    const settleTransaction = {
+      bankingPayout: {
+        update: jest.fn().mockResolvedValue({
+          id: 'payout-id',
+          status: BankingPaymentStatus.SUCCEEDED,
+          amount: 250n,
+          currency: 'GBP',
+        }),
+      },
+      externalBankAccount: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const prisma = {
+      bankingPayment: {
+        findFirst: jest.fn(),
+      },
+      $transaction: jest
+        .fn()
+        .mockImplementationOnce(async (operation: (tx: typeof reserveTransaction) => unknown) =>
+          operation(reserveTransaction),
+        )
+        .mockImplementationOnce(async (operation: (tx: typeof settleTransaction) => unknown) =>
+          operation(settleTransaction),
+        ),
+    } as unknown as PrismaService;
+    const provider = {
+      mode: 'sandbox',
+      createPayout: jest.fn(),
+    };
+    const audit = { create: jest.fn() };
+    const config = { get: jest.fn().mockReturnValue('true') };
+    const manager = new BankingManager(prisma, audit as never, config as never, provider as never);
+
+    const response = await manager.createPayout(userId, { amount: 250 });
+
+    expect(prisma.bankingPayment.findFirst).not.toHaveBeenCalled();
+    expect(provider.createPayout).not.toHaveBeenCalled();
+    expect(reserveTransaction.wallet.update).toHaveBeenCalledWith({ where: { id: 'wallet-id' }, data: { balance: 750n } });
+    expect(settleTransaction.bankingPayout.update).toHaveBeenCalledWith({
+      where: { id: 'payout-id' },
+      data: expect.objectContaining({
+        providerPayoutId: expect.stringMatching(/^test-instant-payout-/),
+        status: BankingPaymentStatus.SUCCEEDED,
+        raw: expect.objectContaining({
+          testingMode: 'instant_payout_without_payment_authorisation',
+          amount: '250',
+        }),
+      }),
+    });
+    expect(response).toEqual(expect.objectContaining({ id: 'payout-id', amount: '250', newBalance: '750' }));
   });
 });

@@ -30,7 +30,39 @@ form { display: flex; flex-direction: column; gap: 1rem; }
 .summary-card, .stake-display { display: grid; gap: 0.35rem; padding: 1rem; border: 1px solid #263c35; border-radius: 10px; background: #0b1512; }
 .summary-card span, .stake-display span { color: #83a298; }
 .summary-card strong, .stake-display strong { font-size: 1.35rem; }
-.stake-panel { display: grid; grid-template-columns: 1fr auto; align-items: end; margin: 1rem 0; }
+.stake-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(9, 17, 15, 0.74);
+}
+.stake-modal {
+  width: min(100%, 460px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+}
+.selected-stake-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #385047;
+  border-radius: 10px;
+  background: #0b1512;
+}
+.selected-stake-card div { display: grid; gap: 0.2rem; }
+.selected-stake-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .game-toggle { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
 .game-toggle .active { background: #61e6af; color: #07100d; }
 label { display: grid; gap: 0.4rem; color: #b9cbc5; }
@@ -39,12 +71,27 @@ small, .muted { color: #83a298; }
 .section-heading, .button-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
 .transactions { margin-top: 1.5rem; }
 .transactions ol { list-style: none; padding: 0; margin: 0; }
-.transactions li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid #263c35; }
+.transactions li { border-top: 1px solid #263c35; }
 .transactions li.selected { background: rgba(97, 230, 175, 0.08); }
 .transactions li div:first-child { display: grid; gap: 0.2rem; }
+button.transaction-choice {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+button.transaction-choice span:last-child { color: #61e6af; font-weight: 800; }
 .history ol { list-style: none; padding: 0; margin: 0; }
 .history li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid #263c35; }
 
 @media (max-width: 650px) {
-  .auth-grid, .play-grid, .summary-grid, .stake-panel, .transactions li { grid-template-columns: 1fr; }
+  .auth-grid, .play-grid, .summary-grid, button.transaction-choice, .selected-stake-card { grid-template-columns: 1fr; }
+  .selected-stake-actions { width: 100%; }
+  .selected-stake-actions button { flex: 1; }
 }

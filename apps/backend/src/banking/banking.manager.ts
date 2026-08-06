@@ -5,6 +5,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   BankingConnectionStatus,
   BankingPaymentStatus,
@@ -32,6 +33,7 @@ export class BankingManager {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditManager,
+    private readonly config: ConfigService,
     @Inject(TRUE_LAYER_PROVIDER) private readonly provider: TrueLayerProvider,
   ) {}
 
@@ -362,16 +364,18 @@ export class BankingManager {
 
     let providerPayment: ProviderDepositResult;
     try {
-      providerPayment = await this.provider.createDeposit({
-        userId,
-        email: user.email,
-        username: user.username,
-        amount,
-        currency: BANKING_CURRENCY,
-        idempotencyKey,
-        localPaymentId: pendingPayment.id,
-        sourceTransactionId: dto.sourceTransactionId,
-      });
+      providerPayment = this.instantDepositsForTesting()
+        ? this.createInstantTestingDepositResult(pendingPayment.id, idempotencyKey, amount, dto.sourceTransactionId)
+        : await this.provider.createDeposit({
+            userId,
+            email: user.email,
+            username: user.username,
+            amount,
+            currency: BANKING_CURRENCY,
+            idempotencyKey,
+            localPaymentId: pendingPayment.id,
+            sourceTransactionId: dto.sourceTransactionId,
+          });
     } catch (error) {
       await this.markDepositFailed(userId, pendingPayment.id, idempotencyKey, error);
       throw error;
@@ -418,7 +422,6 @@ export class BankingManager {
     if (amount <= 0n) throw new BadRequestException('Payout amount must be positive');
 
     const idempotencyKey = randomUUID();
-    const paymentSourceId = await this.latestPaymentSourceIdForUser(userId);
     const pending = await this.withSerializationRetry(() =>
       this.prisma.$transaction(
         async (tx) => {
@@ -471,13 +474,9 @@ export class BankingManager {
 
     let providerPayout: ProviderPayoutResult;
     try {
-      providerPayout = await this.provider.createPayout({
-        userId,
-        amount,
-        currency: BANKING_CURRENCY,
-        idempotencyKey,
-        paymentSourceId,
-      });
+      providerPayout = this.instantDepositsForTesting()
+        ? this.createInstantTestingPayoutResult(idempotencyKey, amount)
+        : await this.createProviderPayout(userId, amount, idempotencyKey);
     } catch (error) {
       await this.failPayoutAndRefund(userId, pending.payoutId, amount, idempotencyKey);
       throw error;
@@ -710,6 +709,58 @@ export class BankingManager {
       select: { paymentSourceId: true },
     });
     return payment?.paymentSourceId ?? undefined;
+  }
+
+  private instantDepositsForTesting(): boolean {
+    return this.config.get<string>('BANKING_INSTANT_DEPOSITS_FOR_TESTING', 'false').toLowerCase() === 'true';
+  }
+
+  private createInstantTestingDepositResult(
+    localPaymentId: string,
+    idempotencyKey: string,
+    amount: bigint,
+    sourceTransactionId?: string,
+  ): ProviderDepositResult {
+    return {
+      providerPaymentId: `test-instant-${idempotencyKey}`,
+      paymentSourceId: `test-payment-source-${localPaymentId}`,
+      status: BankingPaymentStatus.SUCCEEDED,
+      raw: {
+        provider: BANKING_PROVIDER,
+        mode: this.provider.mode,
+        testingMode: 'instant_deposit_without_payment_authorisation',
+        amount: amount.toString(),
+        sourceTransactionId: sourceTransactionId ?? null,
+      },
+    };
+  }
+
+  private createInstantTestingPayoutResult(idempotencyKey: string, amount: bigint): ProviderPayoutResult {
+    return {
+      providerPayoutId: `test-instant-payout-${idempotencyKey}`,
+      status: BankingPaymentStatus.SUCCEEDED,
+      raw: {
+        provider: BANKING_PROVIDER,
+        mode: this.provider.mode,
+        testingMode: 'instant_payout_without_payment_authorisation',
+        amount: amount.toString(),
+      },
+    };
+  }
+
+  private async createProviderPayout(
+    userId: string,
+    amount: bigint,
+    idempotencyKey: string,
+  ): Promise<ProviderPayoutResult> {
+    const paymentSourceId = await this.latestPaymentSourceIdForUser(userId);
+    return this.provider.createPayout({
+      userId,
+      amount,
+      currency: BANKING_CURRENCY,
+      idempotencyKey,
+      paymentSourceId,
+    });
   }
 
   private async adjustCachedBankAccountBalance(
